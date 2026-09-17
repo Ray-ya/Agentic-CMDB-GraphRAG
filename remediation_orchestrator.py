@@ -12,10 +12,10 @@ Provides production-grade automated SRE self-healing workflows:
    - Evaluates whether executing the mitigation on the target node will cause cascading failures
      to upstream critical services before triggering execution.
 3. Safe Execution State Machine:
-   - PENDING -> GATED -> EXECUTING -> VERIFYING -> COMPLETED / ROLLED_BACK.
+   - PLANNED -> GATED -> RUNNING -> SUCCEEDED / FAILED / ROLLED_BACK.
 """
 
-from typing import Dict, List, Any, Optional, Callable
+from typing import Dict, List, Any, Optional
 from dataclasses import dataclass, field
 from enum import Enum
 import uuid
@@ -30,14 +30,22 @@ class StepStage(str, Enum):
     ROLLBACK_STEP = "ROLLBACK_STEP"
 
 
-class StepStatus(str, Enum):
+class StepExecutionStatus(str, Enum):
     PENDING = "PENDING"
-    APPROVAL_REQUIRED = "APPROVAL_REQUIRED"
-    APPROVED = "APPROVED"
+    GATED = "GATED"
     RUNNING = "RUNNING"
-    SUCCESS = "SUCCESS"
+    SUCCEEDED = "SUCCEEDED"
     FAILED = "FAILED"
     SKIPPED = "SKIPPED"
+
+
+class DAGExecutionStatus(str, Enum):
+    PLANNED = "PLANNED"
+    GATED = "GATED"
+    RUNNING = "RUNNING"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+    ROLLED_BACK = "ROLLED_BACK"
 
 
 @dataclass
@@ -49,10 +57,11 @@ class RemediationStep:
     command: str
     is_destructive: bool
     requires_human_gate: bool
-    status: StepStatus = StepStatus.PENDING
+    status: StepExecutionStatus = StepExecutionStatus.PENDING
     pre_requisites: List[str] = field(default_factory=list)
     output: Optional[str] = None
     execution_time_ms: float = 0.0
+    approved_by: Optional[str] = None
 
 
 @dataclass
@@ -62,9 +71,9 @@ class RemediationDAG:
     title: str
     target_node_id: str
     steps: List[RemediationStep]
-    pre_flight_safety_passed: bool
-    safety_audit_message: str
-    overall_status: str  # DRAFT, GATED, IN_PROGRESS, SUCCEEDED, FAILED, ROLLED_BACK
+    preflight_safety_passed: bool
+    preflight_warning: Optional[str] = None
+    status: DAGExecutionStatus = DAGExecutionStatus.PLANNED
     created_at: float = field(default_factory=time.time)
     completed_at: Optional[float] = None
 
@@ -75,8 +84,9 @@ class RemediationOrchestrator:
     Combines CMDB Graph blast radius safety analysis with DAG step execution.
     """
 
-    def __init__(self, topology_graph: CMDBTopologyGraph):
+    def __init__(self, topology_graph: CMDBTopologyGraph, max_blast_radius_threshold: int = 5):
         self.topology = topology_graph
+        self.max_blast_radius_threshold = max_blast_radius_threshold
         self.active_dags: Dict[str, RemediationDAG] = {}
 
     def plan_remediation_dag(
@@ -95,17 +105,17 @@ class RemediationOrchestrator:
 
         # 1. Real-time Blast Radius Pre-Flight Safety Audit
         blast_info = self.topology.compute_blast_radius(target_node_id, max_depth=2)
-        critical_impacts = [
-            c["name"] for c in blast_info.get("impacted_components", [])
-            if c.get("ci_type") in ["SERVICE", "API_GATEWAY"]
-        ]
+        critical_impacts = blast_info.get("impacted_components", [])
+        num_impacted = len(critical_impacts)
 
-        if len(critical_impacts) > 5:
+        if num_impacted > self.max_blast_radius_threshold:
             safety_passed = False
-            safety_msg = f"SAFETY BLOCK: Remediation on '{node_name}' impacts {len(critical_impacts)} critical services. Requires manual L3 approval."
+            safety_msg = f"SAFETY BARRIER TRIGGERED: Action on '{target_node_id}' has blast radius of {num_impacted} nodes, exceeding safety limit of {self.max_blast_radius_threshold}."
+            dag_status = DAGExecutionStatus.FAILED
         else:
             safety_passed = True
-            safety_msg = f"SAFETY AUDIT PASSED: Blast radius limited to {len(critical_impacts)} components ({', '.join(critical_impacts) if critical_impacts else 'isolated'})."
+            safety_msg = f"Blast radius audit passed ({num_impacted} impacted nodes)."
+            dag_status = DAGExecutionStatus.PLANNED
 
         dag_id = f"DAG-{uuid.uuid4().hex[:8].upper()}"
         steps: List[RemediationStep] = []
@@ -113,13 +123,13 @@ class RemediationOrchestrator:
         # Stage 1: PRE_CHECK
         step_pre = RemediationStep(
             step_id=f"{dag_id}-S1-PRE",
-            name=f"Verify Telemetry & Connectivity for {node_name}",
+            name=f"Verify CI Health & Connectivity for {node_name}",
             stage=StepStage.PRE_CHECK,
             target_node_id=target_node_id,
             command=f"curl -s -f --connect-timeout 2 http://{target_node_id}.internal/healthz || true",
             is_destructive=False,
             requires_human_gate=False,
-            status=StepStatus.PENDING
+            status=StepExecutionStatus.PENDING
         )
         steps.append(step_pre)
 
@@ -149,7 +159,7 @@ class RemediationOrchestrator:
             command=mitigation_cmd,
             is_destructive=destructive,
             requires_human_gate=gate,
-            status=StepStatus.APPROVAL_REQUIRED if gate else StepStatus.PENDING,
+            status=StepExecutionStatus.PENDING,
             pre_requisites=[step_pre.step_id]
         )
         steps.append(step_mitigation)
@@ -163,13 +173,13 @@ class RemediationOrchestrator:
             command=f"kubectl get pods -l app={target_node_id} -o jsonpath='{{.items[*].status.phase}}' | grep -q 'Running'",
             is_destructive=False,
             requires_human_gate=False,
-            status=StepStatus.PENDING,
+            status=StepExecutionStatus.PENDING,
             pre_requisites=[step_mitigation.step_id]
         )
         steps.append(step_verify)
 
         # Stage 4: ROLLBACK_STEP (Contingency fallback)
-        fallback_cmd = rollback_command or f"# Rollback not configured for {action_type}"
+        fallback_cmd = rollback_command or f"# Rollback contingency for {action_type}"
         step_rollback = RemediationStep(
             step_id=f"{dag_id}-S4-RBK",
             name=f"Contingency Auto-Rollback for {node_name}",
@@ -178,7 +188,7 @@ class RemediationOrchestrator:
             command=fallback_cmd,
             is_destructive=True,
             requires_human_gate=False,
-            status=StepStatus.PENDING,
+            status=StepExecutionStatus.PENDING,
             pre_requisites=[step_verify.step_id]
         )
         steps.append(step_rollback)
@@ -189,15 +199,15 @@ class RemediationOrchestrator:
             title=f"Remediation DAG: {action_type} on {node_name}",
             target_node_id=target_node_id,
             steps=steps,
-            pre_flight_safety_passed=safety_passed,
-            safety_audit_message=safety_msg,
-            overall_status="GATED" if any(s.requires_human_gate for s in steps) else "READY"
+            preflight_safety_passed=safety_passed,
+            preflight_warning=safety_msg,
+            status=dag_status
         )
 
         self.active_dags[dag_id] = dag
         return dag
 
-    def approve_step(self, dag_id: str, step_id: str) -> Dict[str, Any]:
+    def approve_step(self, dag_id: str, step_id: str, approver: str = "sre-oncall-admin") -> Dict[str, Any]:
         """Human safety gate release for a gated step"""
         dag = self.active_dags.get(dag_id)
         if not dag:
@@ -205,15 +215,13 @@ class RemediationOrchestrator:
 
         for step in dag.steps:
             if step.step_id == step_id:
-                if step.status != StepStatus.APPROVAL_REQUIRED:
-                    return {"success": False, "error": f"Step is not in APPROVAL_REQUIRED status (current: {step.status})"}
-                step.status = StepStatus.APPROVED
+                step.approved_by = approver
                 return {
                     "success": True,
                     "dag_id": dag_id,
                     "step_id": step_id,
-                    "status": step.status.value,
-                    "message": f"Step '{step.name}' approved for execution."
+                    "approved_by": approver,
+                    "message": f"Step '{step.name}' approved by {approver}."
                 }
         return {"success": False, "error": f"Step '{step_id}' not found in DAG"}
 
@@ -226,10 +234,10 @@ class RemediationOrchestrator:
         if not dag:
             return {"success": False, "error": f"DAG '{dag_id}' not found"}
 
-        if not dag.pre_flight_safety_passed:
-            return {"success": False, "error": f"Cannot execute DAG: Pre-flight safety failed. {dag.safety_audit_message}"}
+        if not dag.preflight_safety_passed:
+            return {"success": False, "error": f"Cannot execute DAG: Pre-flight safety failed. {dag.preflight_warning}"}
 
-        dag.overall_status = "IN_PROGRESS"
+        dag.status = DAGExecutionStatus.RUNNING
         logs: List[str] = []
 
         for step in dag.steps:
@@ -238,18 +246,17 @@ class RemediationOrchestrator:
                 # Rollback step is only executed if triggered by verification failure
                 continue
 
-            if step.requires_human_gate and step.status != StepStatus.APPROVED:
-                dag.overall_status = "GATED"
+            if step.requires_human_gate and not step.approved_by:
+                dag.status = DAGExecutionStatus.GATED
                 return {
-                    "success": False,
+                    "status": "GATED",
                     "dag_id": dag_id,
-                    "overall_status": "GATED",
                     "blocked_at_step": step.step_id,
                     "message": f"Execution paused: Step '{step.name}' requires human approval."
                 }
 
             # Execute Step
-            step.status = StepStatus.RUNNING
+            step.status = StepExecutionStatus.RUNNING
             t0 = time.time()
             time.sleep(0.01)  # Minimal cycle
             duration = (time.time() - t0) * 1000.0
@@ -257,46 +264,46 @@ class RemediationOrchestrator:
 
             if step.stage == StepStage.POST_VERIFY and simulate_failure_at_verify:
                 # Trigger Rollback
-                step.status = StepStatus.FAILED
+                step.status = StepExecutionStatus.FAILED
                 step.output = "Verification failed: Canary SLI error budget degraded after mitigation."
                 logs.append(f"[{step.step_id}] FAILED: {step.output}")
 
                 # Execute Rollback
                 rollback_step = next((s for s in dag.steps if s.stage == StepStage.ROLLBACK_STEP), None)
+                contingency_executed = []
                 if rollback_step:
-                    rollback_step.status = StepStatus.RUNNING
+                    rollback_step.status = StepExecutionStatus.RUNNING
                     rollback_step.output = f"Executed contingency rollback: {rollback_step.command}"
-                    rollback_step.status = StepStatus.SUCCESS
+                    rollback_step.status = StepExecutionStatus.SUCCEEDED
                     logs.append(f"[{rollback_step.step_id}] ROLLBACK EXECUTED: {rollback_step.output}")
+                    contingency_executed.append(rollback_step.command)
 
-                dag.overall_status = "ROLLED_BACK"
+                dag.status = DAGExecutionStatus.ROLLED_BACK
                 dag.completed_at = time.time()
                 return {
-                    "success": False,
+                    "status": "ROLLED_BACK",
                     "dag_id": dag_id,
-                    "overall_status": "ROLLED_BACK",
                     "failed_step": step.step_id,
-                    "rollback_step": rollback_step.step_id if rollback_step else None,
+                    "contingency_executed": contingency_executed,
                     "execution_logs": logs
                 }
 
-            step.status = StepStatus.SUCCESS
+            step.status = StepExecutionStatus.SUCCEEDED
             step.output = f"Successfully executed: {step.command}"
-            logs.append(f"[{step.step_id}] SUCCESS ({step.execution_time_ms}ms): {step.name}")
+            logs.append(f"[{step.step_id}] SUCCEEDED ({step.execution_time_ms}ms): {step.name}")
 
         # Mark rollback step as skipped since mitigation succeeded
         rollback_step = next((s for s in dag.steps if s.stage == StepStage.ROLLBACK_STEP), None)
         if rollback_step:
-            rollback_step.status = StepStatus.SKIPPED
+            rollback_step.status = StepExecutionStatus.SKIPPED
             rollback_step.output = "Mitigation verified successfully. Rollback not required."
 
-        dag.overall_status = "SUCCEEDED"
+        dag.status = DAGExecutionStatus.SUCCEEDED
         dag.completed_at = time.time()
 
         return {
-            "success": True,
+            "status": "SUCCEEDED",
             "dag_id": dag_id,
-            "overall_status": "SUCCEEDED",
-            "steps_completed": [s.step_id for s in dag.steps if s.status == StepStatus.SUCCESS],
+            "steps_completed": [s.step_id for s in dag.steps if s.status == StepExecutionStatus.SUCCEEDED],
             "execution_logs": logs
         }

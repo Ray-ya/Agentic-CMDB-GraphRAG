@@ -343,12 +343,12 @@ def run_tests():
 
     # 10.6 Blast Radius Safety Barrier (Exceeding max allowed downstream impact)
     print("\n[Pillar 10.6] Testing Pre-flight Blast Radius Safety Barrier...")
+    # svc-auth has blast radius 3 (svc-order, svc-payment, ing-01 etc.) -> threshold=2 should block preflight
     strict_orch = RemediationOrchestrator(topo, max_blast_radius_threshold=2)
-    # db-postgres-master has blast radius 4 (payments, checkout, frontend, order-db) -> should block preflight
     blocked_dag = strict_orch.plan_remediation_dag(
         incident_id="INC-DAG-BLOCK-003",
-        target_node_id="db-postgres-master",
-        action_type="RECYCLE_DB_POOL"
+        target_node_id="svc-auth",
+        action_type="RESTART_POD"
     )
     assert blocked_dag.preflight_safety_passed is False
     assert blocked_dag.status == DAGExecutionStatus.FAILED

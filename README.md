@@ -98,3 +98,4 @@ python test_suite.py
 - **Pillar 8**: Closed-Loop Postmortem Synthesis & KB Re-injection
 - **Pillar 9**: FastAPI Server RESTful Endpoints (`/health`, `/api/v1/telemetry/*`, `/api/v1/investigate`, etc.)
 - **Pillar 10**: Multi-Stage Remediation DAG, Blast Radius Pre-flight Barrier & Contingency Rollback Orchestrator
+- **Pillar 11**: Alert Storm Deduplication, Noise Reduction & Topological Flapping Suppressor (`alert_storm_dedup.py`)

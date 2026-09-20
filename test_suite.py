@@ -379,8 +379,133 @@ def run_tests():
     assert r_exec.json()["status"] == "SUCCEEDED"
     print(f"   [PASS] REST API /api/v1/remediation endpoints (plan, approve, execute) verified.")
 
+    # ---------------------------------------------------------
+    # Pillar 11: Alert Storm Deduplication & Topological Flapping Suppressor
+    # ---------------------------------------------------------
+    print("\n[Pillar 11] Testing Alert Storm Deduplication & Topological Flapping Suppressor...")
+    from alert_storm_dedup import AlertStormEngine, AlertItem
+    from datetime import datetime, timezone, timedelta
+
+    alert_storm_engine = AlertStormEngine(topo, flapping_window_seconds=60, flapping_threshold=3)
+
+    now = datetime.now(timezone.utc)
+
+    # 11.1 Test Flapping Detection (Rapid oscillating alert state FIRING <-> RESOLVED)
+    flapping_alert_template = {
+        "alert_id": "ALT-FLAP-01",
+        "source_ci": "pod-pay-01",
+        "metric_name": "container_cpu_throttle",
+        "severity": "WARNING",
+        "message": "CPU throttling oscillating"
+    }
+    # Send 4 oscillating alerts within 30 seconds
+    for i, state in enumerate(["FIRING", "RESOLVED", "FIRING", "RESOLVED"]):
+        item = AlertItem(
+            alert_id=f"ALT-FLAP-{i}",
+            source_ci=flapping_alert_template["source_ci"],
+            metric_name=flapping_alert_template["metric_name"],
+            severity=flapping_alert_template["severity"],
+            timestamp=now - timedelta(seconds=40 - i * 10),
+            message=flapping_alert_template["message"],
+            state=state
+        )
+        is_flapping = alert_storm_engine.record_alert_state(item)
+        if i >= 3:
+            assert is_flapping is True, "Oscillating alert should be marked as flapping"
+    print("   [PASS] Anti-flapping suppression correctly detected rapid state oscillation.")
+
+    # 11.2 Test Cascading Storm Clustering (1 root DB failure causing downstream cascading alerts)
+    storm_alerts = [
+        # Upstream root: Database connection pool alert
+        AlertItem(
+            alert_id="ALT-ROOT-01",
+            source_ci="db-postgres-pay",
+            metric_name="pg_stat_activity_connections",
+            severity="CRITICAL",
+            timestamp=now,
+            message="Connection pool exhausted (99% active)",
+            state="FIRING"
+        ),
+        # Downstream cascading symptom 1: Payment gateway latency
+        AlertItem(
+            alert_id="ALT-DOWN-01",
+            source_ci="svc-payment",
+            metric_name="http_request_duration_seconds",
+            severity="CRITICAL",
+            timestamp=now,
+            message="HTTP 504 Gateway Timeout elevated",
+            state="FIRING"
+        ),
+        # Downstream cascading symptom 2: Order service degradation
+        AlertItem(
+            alert_id="ALT-DOWN-02",
+            source_ci="svc-order",
+            metric_name="downstream_call_failed",
+            severity="WARNING",
+            timestamp=now,
+            message="Failed RPC calls to payment service",
+            state="FIRING"
+        ),
+        # Downstream cascading symptom 3: Ingress error rate
+        AlertItem(
+            alert_id="ALT-DOWN-03",
+            source_ci="ing-01",
+            metric_name="nginx_ingress_controller_requests",
+            severity="WARNING",
+            timestamp=now,
+            message="Ingress 5xx error rate > 5%",
+            state="FIRING"
+        ),
+        # Flapping alert (should be filtered)
+        AlertItem(
+            alert_id="ALT-FLAP-TEST",
+            source_ci="pod-pay-01",
+            metric_name="container_cpu_throttle",
+            severity="WARNING",
+            timestamp=now,
+            message="CPU throttling oscillating",
+            state="FIRING"
+        )
+    ]
+
+    clusters, storm_metrics = alert_storm_engine.cluster_alerts(storm_alerts)
+    assert len(clusters) == 1, f"Expected 1 collapsed incident cluster, got {len(clusters)}"
+    root_cluster = clusters[0]
+    assert root_cluster.root_ci_candidate == "db-postgres-pay"
+    assert root_cluster.alerts_count == 4  # 4 valid cascading alerts collapsed, 1 flapping suppressed
+    assert "db-postgres-pay" in root_cluster.affected_cis
+    assert storm_metrics["suppressed_flapping"] == 1
+    assert storm_metrics["clusters_formed"] == 1
+    print(f"   [PASS] Cascading storm successfully collapsed into 1 root cluster: {root_cluster.cluster_id}")
+    print(f"   [PASS] Storm metrics verified: {storm_metrics['noise_reduction_percentage']} noise reduction.")
+
+    # 11.3 Test REST API /api/v1/alerts/storm-cluster
+    r_storm = client.post("/api/v1/alerts/storm-cluster", json={
+        "alerts": [
+            {
+                "alert_id": "API-ALT-01",
+                "source_ci": "db-postgres-pay",
+                "metric_name": "db_connections",
+                "severity": "CRITICAL",
+                "message": "DB saturation"
+            },
+            {
+                "alert_id": "API-ALT-02",
+                "source_ci": "svc-payment",
+                "metric_name": "http_5xx",
+                "severity": "CRITICAL",
+                "message": "504 from payment"
+            }
+        ]
+    })
+    assert r_storm.status_code == 200
+    storm_res = r_storm.json()
+    assert len(storm_res["clusters"]) == 1
+    assert storm_res["clusters"][0]["root_ci_candidate"] == "db-postgres-pay"
+    print("   [PASS] REST API /api/v1/alerts/storm-cluster responded HTTP 200 OK.")
+
     print("\n" + "=" * 70)
-    print(">> [SUCCESS] All 10 Verification Pillars Passed with Exit Code 0!")
+    print(">> [SUCCESS] All 11 Verification Pillars Passed with Exit Code 0!")
     print("=" * 70)
 
 

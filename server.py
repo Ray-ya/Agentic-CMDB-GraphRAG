@@ -24,6 +24,8 @@ from multimodal_ingestion import MultiModalTelemetryIngestionEngine, TelemetryEv
 from dual_level_graphrag import DualLevelGraphRAGEngine
 from rca_agent import AgenticRCAResolver
 from remediation_orchestrator import RemediationOrchestrator
+from alert_storm_dedup import AlertStormEngine, AlertItem
+from datetime import datetime, timezone
 
 app = FastAPI(
     title="Agentic-CMDB-GraphRAG API Gateway",
@@ -39,6 +41,7 @@ telemetry_engine = MultiModalTelemetryIngestionEngine()
 engine = DualLevelGraphRAGEngine(topology, kb, correlator, telemetry_engine)
 resolver = AgenticRCAResolver(engine)
 orchestrator = RemediationOrchestrator(topology)
+alert_engine = AlertStormEngine(topology)
 
 
 class AlertWebhookPayload(BaseModel):
@@ -240,4 +243,46 @@ def execute_remediation_dag(payload: ExecuteDAGPayload):
         simulate_failure_at_verify=payload.simulate_failure_at_verify or False
     )
     return res
+
+
+class RawAlertPayload(BaseModel):
+    alert_id: str
+    source_ci: str
+    metric_name: str
+    severity: str
+    message: str
+    state: Optional[str] = "FIRING"
+    timestamp: Optional[float] = None
+
+
+class AlertStormBatchPayload(BaseModel):
+    alerts: List[RawAlertPayload]
+
+
+@app.post("/api/v1/alerts/storm-cluster")
+def cluster_alert_storm(payload: AlertStormBatchPayload):
+    """
+    Suppresses flapping alerts and clusters cascading alert storms into 
+    unified root-incident clusters using CMDB directed dependency topology.
+    """
+    alert_items = []
+    for a in payload.alerts:
+        ts = datetime.fromtimestamp(a.timestamp, tz=timezone.utc) if a.timestamp else datetime.now(timezone.utc)
+        item = AlertItem(
+            alert_id=a.alert_id,
+            source_ci=a.source_ci,
+            metric_name=a.metric_name,
+            severity=a.severity,
+            timestamp=ts,
+            message=a.message,
+            state=a.state or "FIRING"
+        )
+        alert_items.append(item)
+
+    clusters, metrics = alert_engine.cluster_alerts(alert_items)
+    return {
+        "metrics": metrics,
+        "clusters": [asdict(c) for c in clusters]
+    }
+
 

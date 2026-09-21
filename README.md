@@ -1,8 +1,8 @@
 # Agentic-CMDB-GraphRAG: Topology-Grounded SRE Agent with Multi-Modal Telemetry & Temporal Change Correlation
 
-[![Test Status](https://img.shields.io/badge/tests-passing-brightgreen.svg)](test_suite.py)
+[![Test Status](https://img.shields.io/badge/tests-12%20pillars%20passing-brightgreen.svg)](test_suite.py)
 [![Architecture](https://img.shields.io/badge/architecture-Dual--Level%20GraphRAG-blue.svg)](dual_level_graphrag.py)
-[![FastAPI](https://img.shields.io/badge/FastAPI-v1.2.0-009688.svg)](server.py)
+[![FastAPI](https://img.shields.io/badge/FastAPI-v1.4.0-009688.svg)](server.py)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
 An Enterprise SRE Root-Cause Analysis (RCA) and Autonomous Remediation Engine powered by **CMDB Directed Dependency Graphs**, **Temporal CI/CD Change Correlator**, **Multi-Modal Distributed Telemetry Ingestion**, and **Dual-Level GraphRAG** (inspired by LightRAG, HKUDS 2025).
@@ -97,5 +97,6 @@ python test_suite.py
 - **Pillar 7**: Autonomous RCA Agent with Safe Action Formation & Human Gate
 - **Pillar 8**: Closed-Loop Postmortem Synthesis & KB Re-injection
 - **Pillar 9**: FastAPI Server RESTful Endpoints (`/health`, `/api/v1/telemetry/*`, `/api/v1/investigate`, etc.)
-- **Pillar 10**: Multi-Stage Remediation DAG, Blast Radius Pre-flight Barrier & Contingency Rollback Orchestrator
+- **Pillar 10**: Multi-Stage Remediation DAG, Blast Radius Pre-flight Barrier & Contingency Rollback Orchestrator (`remediation_orchestrator.py`)
 - **Pillar 11**: Alert Storm Deduplication, Noise Reduction & Topological Flapping Suppressor (`alert_storm_dedup.py`)
+- **Pillar 12**: Continuous Topology Drift Detection & Shadow Dependency Reconciler (`topology_drift_reconciler.py`)

@@ -25,12 +25,13 @@ from dual_level_graphrag import DualLevelGraphRAGEngine
 from rca_agent import AgenticRCAResolver
 from remediation_orchestrator import RemediationOrchestrator
 from alert_storm_dedup import AlertStormEngine, AlertItem
+from topology_drift_reconciler import TopologyDriftReconciler, DriftType, DriftReconciliationReport
 from datetime import datetime, timezone
 
 app = FastAPI(
     title="Agentic-CMDB-GraphRAG API Gateway",
-    description="Enterprise SRE Root-Cause Analysis and Topology-Grounded GraphRAG System with Temporal Correlation & Multi-Modal Telemetry",
-    version="1.3.0"
+    description="Enterprise SRE Root-Cause Analysis and Topology-Grounded GraphRAG System with Temporal Correlation, Multi-Modal Telemetry & Drift Reconciler",
+    version="1.4.0"
 )
 
 # Global system state
@@ -42,6 +43,7 @@ engine = DualLevelGraphRAGEngine(topology, kb, correlator, telemetry_engine)
 resolver = AgenticRCAResolver(engine)
 orchestrator = RemediationOrchestrator(topology)
 alert_engine = AlertStormEngine(topology)
+drift_reconciler = TopologyDriftReconciler(topology, telemetry_engine)
 
 
 class AlertWebhookPayload(BaseModel):
@@ -284,5 +286,41 @@ def cluster_alert_storm(payload: AlertStormBatchPayload):
         "metrics": metrics,
         "clusters": [asdict(c) for c in clusters]
     }
+
+
+class DriftReconciliationPayload(BaseModel):
+    live_k8s_resources: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
+    observed_spans: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
+    auto_heal: Optional[bool] = False
+
+
+@app.post("/api/v1/topology/reconcile-drift")
+def reconcile_topology_drift(payload: DriftReconciliationPayload):
+    """
+    Pillar 12: Reconciles CMDB declared graph against live runtime K8s states
+    and distributed OpenTelemetry trace spans to detect shadow CIs, phantom CIs,
+    and undocumented dependency edges.
+    """
+    report = drift_reconciler.reconcile(
+        live_k8s_resources=payload.live_k8s_resources,
+        observed_spans=payload.observed_spans
+    )
+    res: Dict[str, Any] = {
+        "report_id": report.report_id,
+        "generated_at": report.generated_at,
+        "total_drifts": report.total_drifts,
+        "critical_drifts": report.critical_drifts,
+        "warning_drifts": report.warning_drifts,
+        "graph_health_score": report.graph_health_score,
+        "drifts": [asdict(d) for d in report.drifts],
+        "healing_patch": report.healing_patch
+    }
+
+    if payload.auto_heal:
+        healing_result = drift_reconciler.apply_auto_healing(report)
+        res["auto_healing_applied"] = healing_result
+
+    return res
+
 
 

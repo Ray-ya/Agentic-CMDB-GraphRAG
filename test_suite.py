@@ -504,10 +504,75 @@ def run_tests():
     assert storm_res["clusters"][0]["root_ci_candidate"] == "db-postgres-pay"
     print("   [PASS] REST API /api/v1/alerts/storm-cluster responded HTTP 200 OK.")
 
+    # ---------------------------------------------------------
+    # Pillar 12: Continuous Topology Drift Engine & Shadow Dependency Reconciler
+    # ---------------------------------------------------------
+    print("\n[Pillar 12] Testing Topology Drift Engine & Shadow Dependency Reconciler...")
+    from topology_drift_reconciler import TopologyDriftReconciler, DriftType
+
+    drift_reconciler_test = TopologyDriftReconciler(topo)
+
+    # 12.1 Setup live runtime simulation:
+    # - New uncataloged microservice running in K8s: 'svc-recommendation' (SHADOW_CI)
+    # - Status divergence on 'pod-pay-01': CMDB says DEGRADED, runtime recovered to HEALTHY (MUTATED_STATE)
+    # - Pod 'pod-legacy-worker' defined in CMDB is absent in live K8s (PHANTOM_CI)
+    # Add a phantom pod to CMDB first to test detection
+    topo.add_node(CINode(id="pod-legacy-worker", name="legacy-worker-pod", ci_type="POD", status="HEALTHY"))
+
+    live_k8s = [
+        {"id": "svc-order", "name": "order-api-service", "type": "SERVICE", "status": "DEGRADED"},
+        {"id": "svc-payment", "name": "payment-gateway-service", "type": "SERVICE", "status": "CRITICAL"},
+        {"id": "pod-pay-01", "name": "payment-pod-01", "type": "POD", "status": "HEALTHY"}, # Changed from CRITICAL/DEGRADED
+        {"id": "svc-recommendation", "name": "recommendation-service", "type": "SERVICE", "status": "HEALTHY"} # Shadow CI
+    ]
+
+    # Distributed trace span shows 'svc-order' calling 'svc-recommendation' directly, but no edge exists
+    observed_spans = [
+        {
+            "span_id": "spn-live-999",
+            "trace_id": "trc-live-001",
+            "caller_ci": "svc-order",
+            "callee_ci": "svc-recommendation",
+            "duration_ms": 42.5,
+            "has_errors": False
+        }
+    ]
+
+    drift_report = drift_reconciler_test.reconcile(live_k8s_resources=live_k8s, observed_spans=observed_spans)
+    assert drift_report.total_drifts >= 3, f"Expected at least 3 drifts, got {drift_report.total_drifts}"
+    drift_types = [d.drift_type for d in drift_report.drifts]
+    assert DriftType.SHADOW_CI in drift_types, "Must detect unregistered shadow CI"
+    assert DriftType.MUTATED_STATE in drift_types, "Must detect status mismatch"
+    assert DriftType.UNDOCUMENTED_EDGE in drift_types, "Must detect hidden dependency edge from traces"
+    print(f"   [PASS] Topology drift detection successful: {drift_report.total_drifts} drifts identified.")
+    print(f"   Graph Health Score: {drift_report.graph_health_score}/100.0 (Critical: {drift_report.critical_drifts}, Warning: {drift_report.warning_drifts})")
+
+    # 12.2 Test Auto-Healing Patch Application
+    heal_res = drift_reconciler_test.apply_auto_healing(drift_report)
+    assert heal_res["status"] == "HEALED"
+    assert heal_res["nodes_added"] >= 1
+    assert "svc-recommendation" in topo.nodes
+    # Verify edge was synthesized
+    assert any(e.target == "svc-recommendation" for e in topo.out_edges.get("svc-order", []))
+    print(f"   [PASS] Automated Graph Self-Healing applied: Node 'svc-recommendation' registered & Edge added.")
+
+    # 12.3 Test REST API /api/v1/topology/reconcile-drift
+    r_drift = client.post("/api/v1/topology/reconcile-drift", json={
+        "live_k8s_resources": live_k8s,
+        "observed_spans": observed_spans,
+        "auto_heal": True
+    })
+    assert r_drift.status_code == 200
+    res_data = r_drift.json()
+    assert res_data["total_drifts"] >= 1
+    assert "auto_healing_applied" in res_data
+    print("   [PASS] REST API /api/v1/topology/reconcile-drift responded HTTP 200 OK.")
+
     print("\n" + "=" * 70)
-    print(">> [SUCCESS] All 11 Verification Pillars Passed with Exit Code 0!")
+    print(">> [SUCCESS] All 12 Verification Pillars Passed with Exit Code 0!")
     print("=" * 70)
 
 
 if __name__ == "__main__":
     run_tests()
+

@@ -568,8 +568,52 @@ def run_tests():
     assert "auto_healing_applied" in res_data
     print("   [PASS] REST API /api/v1/topology/reconcile-drift responded HTTP 200 OK.")
 
+    # ---------------------------------------------------------
+    # Pillar 13: Automated Canary SLI Drift Evaluator & Smart Rollback Gate
+    # ---------------------------------------------------------
+    print("\n[Pillar 13] Testing Automated Canary SLI Drift Evaluator & Smart Rollback Gate...")
+    from canary_evaluator import CanarySLIEvaluator
+
+    canary_eval = CanarySLIEvaluator()
+
+    # 13.1 Normal Canary Metrics -> Should PROMOTE
+    healthy_metrics = {
+        "http_p99_latency_ms": 420.0,
+        "http_5xx_error_rate_pct": 0.05,
+        "cpu_throttling_pct": 8.5
+    }
+    res_healthy = canary_eval.evaluate_canary("pod-pay-01", healthy_metrics)
+    assert res_healthy.passed is True
+    assert res_healthy.recommendation == "PROMOTE"
+    assert len(res_healthy.violations) == 0
+    print(f"   [PASS] Healthy canary metrics evaluated: Passed (Recommendation: {res_healthy.recommendation})")
+
+    # 13.2 Degraded Canary Metrics (Latency spike & 5xx error budget burnt) -> Should TRIGGER_ROLLBACK
+    degraded_metrics = {
+        "http_p99_latency_ms": 1850.0,      # Limit is 1200ms
+        "http_5xx_error_rate_pct": 4.8,     # Limit is 1.5%
+        "cpu_throttling_pct": 12.0
+    }
+    res_degraded = canary_eval.evaluate_canary("pod-pay-01", degraded_metrics)
+    assert res_degraded.passed is False
+    assert res_degraded.recommendation == "TRIGGER_ROLLBACK"
+    assert len(res_degraded.violations) == 2
+    print(f"   [PASS] Degraded canary detected {len(res_degraded.violations)} violations -> Safely recommended: {res_degraded.recommendation}")
+    for v in res_degraded.violations:
+        print(f"        * {v}")
+
+    # 13.3 REST API /api/v1/canary/evaluate
+    res_api = client.post("/api/v1/canary/evaluate", json={
+        "target_node_id": "pod-pay-01",
+        "observed_metrics": healthy_metrics
+    })
+    assert res_api.status_code == 200
+    assert res_api.json()["passed"] is True
+    assert res_api.json()["recommendation"] == "PROMOTE"
+    print("   [PASS] REST API /api/v1/canary/evaluate responded HTTP 200 OK.")
+
     print("\n" + "=" * 70)
-    print(">> [SUCCESS] All 12 Verification Pillars Passed with Exit Code 0!")
+    print(">> [SUCCESS] All 13 Verification Pillars Passed with Exit Code 0!")
     print("=" * 70)
 
 

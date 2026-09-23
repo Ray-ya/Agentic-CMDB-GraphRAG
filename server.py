@@ -26,12 +26,13 @@ from rca_agent import AgenticRCAResolver
 from remediation_orchestrator import RemediationOrchestrator
 from alert_storm_dedup import AlertStormEngine, AlertItem
 from topology_drift_reconciler import TopologyDriftReconciler, DriftType, DriftReconciliationReport
+from canary_evaluator import CanarySLIEvaluator, CanaryEvaluationResult, SLIMetricThreshold
 from datetime import datetime, timezone
 
 app = FastAPI(
     title="Agentic-CMDB-GraphRAG API Gateway",
     description="Enterprise SRE Root-Cause Analysis and Topology-Grounded GraphRAG System with Temporal Correlation, Multi-Modal Telemetry & Drift Reconciler",
-    version="1.4.0"
+    version="1.5.0"
 )
 
 # Global system state
@@ -44,6 +45,7 @@ resolver = AgenticRCAResolver(engine)
 orchestrator = RemediationOrchestrator(topology)
 alert_engine = AlertStormEngine(topology)
 drift_reconciler = TopologyDriftReconciler(topology, telemetry_engine)
+canary_evaluator = CanarySLIEvaluator()
 
 
 class AlertWebhookPayload(BaseModel):
@@ -321,6 +323,25 @@ def reconcile_topology_drift(payload: DriftReconciliationPayload):
         res["auto_healing_applied"] = healing_result
 
     return res
+
+
+class CanaryEvaluationPayload(BaseModel):
+    target_node_id: str = Field(..., example="pod-pay-01")
+    observed_metrics: Dict[str, float] = Field(..., example={"http_p99_latency_ms": 420.0, "http_5xx_error_rate_pct": 0.05})
+
+
+@app.post("/api/v1/canary/evaluate")
+def evaluate_canary_sli(payload: CanaryEvaluationPayload):
+    """
+    Pillar 13: Evaluates real-time canary SLI metrics (p99 latency, 5xx error budget degradation, cpu throttling)
+    against enterprise SLO thresholds to recommend PROMOTE or TRIGGER_ROLLBACK.
+    """
+    result = canary_evaluator.evaluate_canary(
+        target_node_id=payload.target_node_id,
+        observed_metrics=payload.observed_metrics
+    )
+    return asdict(result)
+
 
 
 

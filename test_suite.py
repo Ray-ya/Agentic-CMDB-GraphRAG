@@ -612,8 +612,55 @@ def run_tests():
     assert res_api.json()["recommendation"] == "PROMOTE"
     print("   [PASS] REST API /api/v1/canary/evaluate responded HTTP 200 OK.")
 
+    # ---------------------------------------------------------
+    # Pillar 14: Dynamic Adaptive Rate-Limiting & Dependency Backpressure Governor
+    # ---------------------------------------------------------
+    print("\n[Pillar 14] Testing Adaptive Rate-Limiting & Dependency Backpressure Governor...")
+    from backpressure_governor import DependencyBackpressureGovernor, NodeHealthMetrics, CircuitState
+
+    bp_gov = DependencyBackpressureGovernor(topo)
+
+    # 14.1 Target degraded database: high latency & connection pool exhaustion
+    db_metrics_degraded = NodeHealthMetrics(
+        latency_p99_ms=1650.0,
+        error_rate_pct=15.0,
+        connection_pool_utilization_pct=96.0
+    )
+    directives_degraded = bp_gov.assess_and_govern("db-postgres-pay", db_metrics_degraded)
+    assert len(directives_degraded) > 0, "Must generate directives for callers of degraded database"
+    for d in directives_degraded:
+        assert d.circuit_state == CircuitState.OPEN
+        assert d.throttle_ratio_pct >= 90.0
+        assert d.allowed_concurrency_limit <= 10
+    print(f"   [PASS] Emergency backpressure triggered: {len(directives_degraded)} callers throttled (Circuit: OPEN, Shed: 90%).")
+
+    # 14.2 Target recovered database: normal operating capacity
+    db_metrics_healthy = NodeHealthMetrics(
+        latency_p99_ms=45.0,
+        error_rate_pct=0.01,
+        connection_pool_utilization_pct=32.0
+    )
+    directives_healthy = bp_gov.assess_and_govern("db-postgres-pay", db_metrics_healthy)
+    for d in directives_healthy:
+        assert d.circuit_state == CircuitState.CLOSED
+        assert d.throttle_ratio_pct == 0.0
+    print(f"   [PASS] Traffic normalized upon recovery: Circuit CLOSED.")
+
+    # 14.3 REST API /api/v1/backpressure/govern
+    r_bp = client.post("/api/v1/backpressure/govern", json={
+        "target_ci": "db-postgres-pay",
+        "latency_p99_ms": 1450.0,
+        "error_rate_pct": 12.5,
+        "connection_pool_utilization_pct": 92.0
+    })
+    assert r_bp.status_code == 200
+    bp_data = r_bp.json()
+    assert bp_data["total_directives"] > 0
+    assert bp_data["directives"][0]["circuit_state"] == "HALF_OPEN"
+    print("   [PASS] REST API /api/v1/backpressure/govern responded HTTP 200 OK.")
+
     print("\n" + "=" * 70)
-    print(">> [SUCCESS] All 13 Verification Pillars Passed with Exit Code 0!")
+    print(">> [SUCCESS] All 14 Verification Pillars Passed with Exit Code 0!")
     print("=" * 70)
 
 

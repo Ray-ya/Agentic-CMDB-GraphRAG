@@ -100,3 +100,5 @@ python test_suite.py
 - **Pillar 10**: Multi-Stage Remediation DAG, Blast Radius Pre-flight Barrier & Contingency Rollback Orchestrator (`remediation_orchestrator.py`)
 - **Pillar 11**: Alert Storm Deduplication, Noise Reduction & Topological Flapping Suppressor (`alert_storm_dedup.py`)
 - **Pillar 12**: Continuous Topology Drift Detection & Shadow Dependency Reconciler (`topology_drift_reconciler.py`)
+- **Pillar 13**: Automated Canary SLI Drift Evaluator & Smart Rollback Gate (`canary_evaluator.py`)
+- **Pillar 14**: Dynamic Adaptive Rate-Limiting & Dependency Backpressure Governor (`backpressure_governor.py`)

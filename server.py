@@ -27,12 +27,13 @@ from remediation_orchestrator import RemediationOrchestrator
 from alert_storm_dedup import AlertStormEngine, AlertItem
 from topology_drift_reconciler import TopologyDriftReconciler, DriftType, DriftReconciliationReport
 from canary_evaluator import CanarySLIEvaluator, CanaryEvaluationResult, SLIMetricThreshold
+from backpressure_governor import DependencyBackpressureGovernor, NodeHealthMetrics, BackpressureDirective, CircuitState
 from datetime import datetime, timezone
 
 app = FastAPI(
     title="Agentic-CMDB-GraphRAG API Gateway",
     description="Enterprise SRE Root-Cause Analysis and Topology-Grounded GraphRAG System with Temporal Correlation, Multi-Modal Telemetry & Drift Reconciler",
-    version="1.5.0"
+    version="1.6.0"
 )
 
 # Global system state
@@ -46,6 +47,7 @@ orchestrator = RemediationOrchestrator(topology)
 alert_engine = AlertStormEngine(topology)
 drift_reconciler = TopologyDriftReconciler(topology, telemetry_engine)
 canary_evaluator = CanarySLIEvaluator()
+backpressure_governor = DependencyBackpressureGovernor(topology)
 
 
 class AlertWebhookPayload(BaseModel):
@@ -341,6 +343,37 @@ def evaluate_canary_sli(payload: CanaryEvaluationPayload):
         observed_metrics=payload.observed_metrics
     )
     return asdict(result)
+
+
+class BackpressureGovernPayload(BaseModel):
+    target_ci: str = Field(..., example="rds-postgres-payment-primary")
+    latency_p99_ms: float = Field(..., example=1450.0)
+    error_rate_pct: float = Field(..., example=12.5)
+    connection_pool_utilization_pct: float = Field(..., example=92.0)
+
+
+@app.post("/api/v1/backpressure/govern")
+def govern_dependency_backpressure(payload: BackpressureGovernPayload):
+    """
+    Pillar 14: Dynamic Adaptive Rate-Limiting & Dependency Backpressure Governor
+    Assesses downstream CI degradation and dynamically computes AIMD concurrency/rate limits
+    and circuit breaking states for all upstream callers to stop cascading outages.
+    """
+    metrics = NodeHealthMetrics(
+        latency_p99_ms=payload.latency_p99_ms,
+        error_rate_pct=payload.error_rate_pct,
+        connection_pool_utilization_pct=payload.connection_pool_utilization_pct
+    )
+    directives = backpressure_governor.assess_and_govern(
+        target_ci=payload.target_ci,
+        metrics=metrics
+    )
+    return {
+        "target_ci": payload.target_ci,
+        "total_directives": len(directives),
+        "directives": [asdict(d) for d in directives]
+    }
+
 
 
 

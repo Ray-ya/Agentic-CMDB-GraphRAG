@@ -659,8 +659,57 @@ def run_tests():
     assert bp_data["directives"][0]["circuit_state"] == "HALF_OPEN"
     print("   [PASS] REST API /api/v1/backpressure/govern responded HTTP 200 OK.")
 
+    # ---------------------------------------------------------
+    # Pillar 15: Topologically-Grounded Chaos Simulator & SPOF Resilience Validator
+    # ---------------------------------------------------------
+    print("\n[Pillar 15] Testing Topologically-Grounded Chaos Simulator & SPOF Validator...")
+    from chaos_resilience_simulator import ChaosResilienceSimulator, ChaosExperimentSpec, FaultType
+
+    chaos_sim = ChaosResilienceSimulator(topo)
+
+    # 15.1 SPOF Detection Audit
+    spofs = chaos_sim.detect_spofs()
+    assert len(spofs) > 0, "Should detect at least 1 SPOF in sample topology"
+    print(f"   [PASS] SPOF audit identified {len(spofs)} critical single points of failure.")
+    for s in spofs:
+        print(f"        * SPOF: {s['node_name']} ({s['node_id']}) - Dependent callers: {s['dependent_caller_count']}")
+
+    # 15.2 Simulate Network Partition on primary database
+    exp_spec = ChaosExperimentSpec(
+        experiment_id="EXP-CHAOS-TEST-01",
+        target_ci="db-postgres-pay",
+        fault_type=FaultType.NETWORK_PARTITION,
+        duration_seconds=60,
+        description="Simulating primary DB network partition"
+    )
+    sim_report = chaos_sim.simulate_fault(exp_spec)
+    assert sim_report.is_spof is True
+    assert sim_report.directly_impacted_count >= 1
+    assert sim_report.cascading_impacted_count >= 1
+    assert sim_report.resilience_score < 70.0  # Significant penalty due to SPOF & cascading
+    assert len(sim_report.hardening_recommendations) >= 2
+    print(f"   [PASS] Topological fault injection simulated: Resilience Score {sim_report.resilience_score}/100.0")
+    print(f"   [PASS] Hardening recommendations generated ({len(sim_report.hardening_recommendations)} actions).")
+
+    # 15.3 Test REST API /api/v1/chaos/spofs and /api/v1/chaos/simulate
+    r_spofs = client.get("/api/v1/chaos/spofs")
+    assert r_spofs.status_code == 200
+    assert r_spofs.json()["total_spofs"] >= 1
+
+    r_sim = client.post("/api/v1/chaos/simulate", json={
+        "experiment_id": "API-EXP-CHAOS-02",
+        "target_ci": "db-postgres-pay",
+        "fault_type": "LATENCY_INJECTION",
+        "injected_latency_ms": 2500.0
+    })
+    assert r_sim.status_code == 200
+    sim_data = r_sim.json()
+    assert sim_data["fault_type"] == "LATENCY_INJECTION"
+    assert sim_data["resilience_score"] > 0
+    print("   [PASS] REST API /api/v1/chaos/spofs and /simulate responded HTTP 200 OK.")
+
     print("\n" + "=" * 70)
-    print(">> [SUCCESS] All 14 Verification Pillars Passed with Exit Code 0!")
+    print(">> [SUCCESS] All 15 Verification Pillars Passed with Exit Code 0!")
     print("=" * 70)
 
 

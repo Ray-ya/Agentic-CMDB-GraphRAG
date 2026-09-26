@@ -28,6 +28,7 @@ from alert_storm_dedup import AlertStormEngine, AlertItem
 from topology_drift_reconciler import TopologyDriftReconciler, DriftType, DriftReconciliationReport
 from canary_evaluator import CanarySLIEvaluator, CanaryEvaluationResult, SLIMetricThreshold
 from backpressure_governor import DependencyBackpressureGovernor, NodeHealthMetrics, BackpressureDirective, CircuitState
+from chaos_resilience_simulator import ChaosResilienceSimulator, ChaosExperimentSpec, FaultType, ChaosSimulationReport
 from datetime import datetime, timezone
 
 app = FastAPI(
@@ -48,6 +49,7 @@ alert_engine = AlertStormEngine(topology)
 drift_reconciler = TopologyDriftReconciler(topology, telemetry_engine)
 canary_evaluator = CanarySLIEvaluator()
 backpressure_governor = DependencyBackpressureGovernor(topology)
+chaos_simulator = ChaosResilienceSimulator(topology)
 
 
 class AlertWebhookPayload(BaseModel):
@@ -373,6 +375,52 @@ def govern_dependency_backpressure(payload: BackpressureGovernPayload):
         "total_directives": len(directives),
         "directives": [asdict(d) for d in directives]
     }
+
+
+class ChaosSimulatePayload(BaseModel):
+    experiment_id: str = Field(..., example="EXP-CHAOS-001")
+    target_ci: str = Field(..., example="db-postgres-pay")
+    fault_type: str = Field(..., example="NETWORK_PARTITION")  # NETWORK_PARTITION, LATENCY_INJECTION, NODE_TERMINATION, RESOURCE_SATURATION
+    duration_seconds: Optional[int] = 60
+    injected_latency_ms: Optional[float] = 0.0
+    description: Optional[str] = ""
+
+
+@app.get("/api/v1/chaos/spofs")
+def detect_topology_spofs():
+    """
+    Pillar 15: Audits CMDB graph for Single Points of Failure (SPOFs)
+    without active-active or standby redundancy across critical dependencies.
+    """
+    spofs = chaos_simulator.detect_spofs()
+    return {
+        "total_spofs": len(spofs),
+        "spofs": spofs
+    }
+
+
+@app.post("/api/v1/chaos/simulate")
+def simulate_topological_chaos(payload: ChaosSimulatePayload):
+    """
+    Pillar 15: Simulates synthetic fault injection across CMDB directed dependencies,
+    propagates blast radius, detects cascading failures, and computes a Resilience Score (0-100).
+    """
+    try:
+        f_type = FaultType(payload.fault_type)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Unsupported fault_type: {payload.fault_type}")
+
+    spec = ChaosExperimentSpec(
+        experiment_id=payload.experiment_id,
+        target_ci=payload.target_ci,
+        fault_type=f_type,
+        duration_seconds=payload.duration_seconds or 60,
+        injected_latency_ms=payload.injected_latency_ms or 0.0,
+        description=payload.description or ""
+    )
+    report = chaos_simulator.simulate_fault(spec)
+    return asdict(report)
+
 
 
 

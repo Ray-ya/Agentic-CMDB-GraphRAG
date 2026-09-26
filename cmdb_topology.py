@@ -80,9 +80,9 @@ class CMDBTopologyGraph:
                 }
 
             if depth < max_depth:
-                # Upstream dependencies that call this node (in_edges with DEPENDS_ON/CONNECTS_TO)
+                # Upstream dependencies that call this node (in_edges with DEPENDS_ON/CONNECTS_TO/DEPLOYS_ON)
                 for edge in self.in_edges.get(curr_id, []):
-                    if edge.source not in visited and edge.relation in ("DEPENDS_ON", "CONNECTS_TO", "ROUTED_BY"):
+                    if edge.source not in visited and edge.relation in ("DEPENDS_ON", "CONNECTS_TO", "ROUTED_BY", "DEPLOYS_ON"):
                         visited.add(edge.source)
                         queue.append((edge.source, depth + 1, f"{rel_path} <- ({edge.relation}) <- {edge.source}"))
 

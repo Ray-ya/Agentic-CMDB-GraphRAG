@@ -1,8 +1,8 @@
 # Agentic-CMDB-GraphRAG: Topology-Grounded SRE Agent with Multi-Modal Telemetry & Temporal Change Correlation
 
-[![Test Status](https://img.shields.io/badge/tests-12%20pillars%20passing-brightgreen.svg)](test_suite.py)
+[![Test Status](https://img.shields.io/badge/tests-15%20pillars%20passing-brightgreen.svg)](test_suite.py)
 [![Architecture](https://img.shields.io/badge/architecture-Dual--Level%20GraphRAG-blue.svg)](dual_level_graphrag.py)
-[![FastAPI](https://img.shields.io/badge/FastAPI-v1.4.0-009688.svg)](server.py)
+[![FastAPI](https://img.shields.io/badge/FastAPI-v1.6.0-009688.svg)](server.py)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
 An Enterprise SRE Root-Cause Analysis (RCA) and Autonomous Remediation Engine powered by **CMDB Directed Dependency Graphs**, **Temporal CI/CD Change Correlator**, **Multi-Modal Distributed Telemetry Ingestion**, and **Dual-Level GraphRAG** (inspired by LightRAG, HKUDS 2025).
@@ -102,3 +102,4 @@ python test_suite.py
 - **Pillar 12**: Continuous Topology Drift Detection & Shadow Dependency Reconciler (`topology_drift_reconciler.py`)
 - **Pillar 13**: Automated Canary SLI Drift Evaluator & Smart Rollback Gate (`canary_evaluator.py`)
 - **Pillar 14**: Dynamic Adaptive Rate-Limiting & Dependency Backpressure Governor (`backpressure_governor.py`)
+- **Pillar 15**: Topologically-Grounded Chaos Simulator & SPOF Resilience Validator (`chaos_resilience_simulator.py`)

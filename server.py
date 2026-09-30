@@ -29,6 +29,7 @@ from topology_drift_reconciler import TopologyDriftReconciler, DriftType, DriftR
 from canary_evaluator import CanarySLIEvaluator, CanaryEvaluationResult, SLIMetricThreshold
 from backpressure_governor import DependencyBackpressureGovernor, NodeHealthMetrics, BackpressureDirective, CircuitState
 from chaos_resilience_simulator import ChaosResilienceSimulator, ChaosExperimentSpec, FaultType, ChaosSimulationReport
+from digital_twin_sandbox import DigitalTwinShadowSandbox, SyntheticRunbook, SandboxActionType, ShadowSimulationResult
 from datetime import datetime, timezone
 
 app = FastAPI(
@@ -50,6 +51,7 @@ drift_reconciler = TopologyDriftReconciler(topology, telemetry_engine)
 canary_evaluator = CanarySLIEvaluator()
 backpressure_governor = DependencyBackpressureGovernor(topology)
 chaos_simulator = ChaosResilienceSimulator(topology)
+digital_twin_sandbox = DigitalTwinShadowSandbox(topology)
 
 
 class AlertWebhookPayload(BaseModel):
@@ -420,6 +422,47 @@ def simulate_topological_chaos(payload: ChaosSimulatePayload):
     )
     report = chaos_simulator.simulate_fault(spec)
     return asdict(report)
+
+
+class SandboxSimulatePayload(BaseModel):
+    target_ci: str = Field(..., example="db-postgres-pay")
+    action_type: str = Field(..., example="DRAIN_AND_RECYCLE_POOL")
+    incident_symptom: Optional[str] = "Database connection pool exhaustion"
+    parameters: Optional[Dict[str, Any]] = Field(default_factory=dict)
+
+
+@app.post("/api/v1/sandbox/simulate-runbook")
+def simulate_shadow_runbook(payload: SandboxSimulatePayload):
+    """
+    Pillar 16: Forks an ephemeral CMDB Digital-Twin Subgraph, executes a synthetic
+    remediation runbook, observes health delta, and evaluates safety gate (SHADOW_VERIFIED vs BLOCKED_COLLATERAL_RISK).
+    """
+    try:
+        a_type = SandboxActionType(payload.action_type)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Unsupported action_type: {payload.action_type}")
+
+    runbook = SyntheticRunbook(
+        runbook_id=f"SYNTH-API-{payload.target_ci}",
+        target_ci=payload.target_ci,
+        action_type=a_type,
+        parameters=payload.parameters or {},
+        rationale=payload.incident_symptom or ""
+    )
+    result = digital_twin_sandbox.simulate_execution(payload.target_ci, runbook)
+    return asdict(result)
+
+
+@app.get("/api/v1/sandbox/simulations")
+def list_sandbox_simulations():
+    """
+    Pillar 16: Returns list of completed shadow sandbox simulations.
+    """
+    return {
+        "total_simulations": len(digital_twin_sandbox.active_simulations),
+        "simulations": [asdict(s) for s in digital_twin_sandbox.active_simulations.values()]
+    }
+
 
 
 

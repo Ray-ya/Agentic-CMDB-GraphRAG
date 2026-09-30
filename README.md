@@ -1,6 +1,6 @@
 # Agentic-CMDB-GraphRAG: Topology-Grounded SRE Agent with Multi-Modal Telemetry & Temporal Change Correlation
 
-[![Test Status](https://img.shields.io/badge/tests-15%20pillars%20passing-brightgreen.svg)](test_suite.py)
+[![Test Status](https://img.shields.io/badge/tests-16%20pillars%20passing-brightgreen.svg)](test_suite.py)
 [![Architecture](https://img.shields.io/badge/architecture-Dual--Level%20GraphRAG-blue.svg)](dual_level_graphrag.py)
 [![FastAPI](https://img.shields.io/badge/FastAPI-v1.6.0-009688.svg)](server.py)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
@@ -103,3 +103,4 @@ python test_suite.py
 - **Pillar 13**: Automated Canary SLI Drift Evaluator & Smart Rollback Gate (`canary_evaluator.py`)
 - **Pillar 14**: Dynamic Adaptive Rate-Limiting & Dependency Backpressure Governor (`backpressure_governor.py`)
 - **Pillar 15**: Topologically-Grounded Chaos Simulator & SPOF Resilience Validator (`chaos_resilience_simulator.py`)
+- **Pillar 16**: CMDB Digital-Twin Shadow Sandbox & Synthetic Runbook Verifier (`digital_twin_sandbox.py`)

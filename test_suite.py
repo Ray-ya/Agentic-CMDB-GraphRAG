@@ -708,8 +708,80 @@ def run_tests():
     assert sim_data["resilience_score"] > 0
     print("   [PASS] REST API /api/v1/chaos/spofs and /simulate responded HTTP 200 OK.")
 
+    # ---------------------------------------------------------
+    # Pillar 16: CMDB Digital-Twin Shadow Sandbox & Synthetic Runbook Verifier
+    # ---------------------------------------------------------
+    print("\n[Pillar 16] Testing CMDB Digital-Twin Shadow Sandbox & Synthetic Runbook Verifier...")
+    from digital_twin_sandbox import (
+        DigitalTwinShadowSandbox,
+        SandboxActionType,
+        SandboxGateVerdict,
+        SyntheticRunbook
+    )
+
+    sandbox = DigitalTwinShadowSandbox(topo)
+
+    # 16.1 Fork Digital-Twin Subgraph
+    twin_subgraph = sandbox.fork_subgraph("db-postgres-pay")
+    assert "db-postgres-pay" in twin_subgraph
+    assert len(twin_subgraph) >= 2, "Subgraph should include target and its 1-hop dependencies"
+    print(f"   [PASS] Digital-Twin Subgraph successfully forked with {len(twin_subgraph)} nodes.")
+
+    # 16.2 Synthesize Runbook & Shadow Simulation for Beneficial Action (Pool Recycle)
+    synth_rb = sandbox.synthesize_runbook("db-postgres-pay", "Postgres connection pool exhaustion")
+    assert synth_rb.action_type == SandboxActionType.DRAIN_AND_RECYCLE_POOL
+    sim_good = sandbox.simulate_execution("db-postgres-pay", synth_rb)
+    assert sim_good.verdict == SandboxGateVerdict.SHADOW_VERIFIED
+    assert sim_good.target_recovered is True
+    assert sim_good.collateral_damage_detected is False
+    assert sim_good.delta_health_score > 30.0
+    assert sim_good.recommended_for_production is True
+    print(f"   [PASS] Beneficial Runbook verified: Verdict={sim_good.verdict.value}, Delta Health=+{sim_good.delta_health_score} pts (Confidence: {sim_good.confidence_score_pct}%)")
+
+    # 16.3 Shadow Simulation for High-Risk Collateral Collapse Action (Abrupt Kill)
+    bad_rb = SyntheticRunbook(
+        runbook_id="SYNTH-RB-BAD-01",
+        target_ci="db-postgres-pay",
+        action_type=SandboxActionType.ABRUPT_KILL_SERVICE,
+        rationale="Simulated reckless termination without draining"
+    )
+    sim_bad = sandbox.simulate_execution("db-postgres-pay", bad_rb)
+    assert sim_bad.verdict == SandboxGateVerdict.BLOCKED_COLLATERAL_RISK
+    assert sim_bad.collateral_damage_detected is True
+    assert sim_bad.recommended_for_production is False
+    assert len(sim_bad.collateral_violations) >= 1
+    print(f"   [PASS] Collateral collapse safely caught: Verdict={sim_bad.verdict.value} (Violations: {len(sim_bad.collateral_violations)})")
+
+    # 16.4 Shadow Simulation for Ineffective Action (Irrelevant Cache Clear)
+    ineffective_rb = SyntheticRunbook(
+        runbook_id="SYNTH-RB-NOOP-01",
+        target_ci="db-postgres-pay",
+        action_type=SandboxActionType.CLEAR_DISK_CACHE,
+        rationale="Clearing disk cache does not fix DB connection saturation"
+    )
+    sim_noop = sandbox.simulate_execution("db-postgres-pay", ineffective_rb)
+    assert sim_noop.verdict == SandboxGateVerdict.INEFFECTIVE_ACTION
+    assert sim_noop.recommended_for_production is False
+    print(f"   [PASS] Ineffective action correctly rejected: Verdict={sim_noop.verdict.value}")
+
+    # 16.5 REST API /api/v1/sandbox/simulate-runbook and /api/v1/sandbox/simulations
+    r_sb = client.post("/api/v1/sandbox/simulate-runbook", json={
+        "target_ci": "db-postgres-pay",
+        "action_type": "DRAIN_AND_RECYCLE_POOL",
+        "incident_symptom": "Database connection pool exhaustion"
+    })
+    assert r_sb.status_code == 200
+    sb_data = r_sb.json()
+    assert sb_data["verdict"] == "SHADOW_VERIFIED"
+    assert sb_data["recommended_for_production"] is True
+
+    r_list = client.get("/api/v1/sandbox/simulations")
+    assert r_list.status_code == 200
+    assert r_list.json()["total_simulations"] >= 1
+    print("   [PASS] REST API /api/v1/sandbox/simulate-runbook & simulations responded HTTP 200 OK.")
+
     print("\n" + "=" * 70)
-    print(">> [SUCCESS] All 15 Verification Pillars Passed with Exit Code 0!")
+    print(">> [SUCCESS] All 16 Verification Pillars Passed with Exit Code 0!")
     print("=" * 70)
 
 

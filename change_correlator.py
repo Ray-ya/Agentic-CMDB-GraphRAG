@@ -106,3 +106,30 @@ class TemporalChangeCorrelator:
         # Sort by correlation score descending
         correlated.sort(key=lambda x: x.correlation_score, reverse=True)
         return correlated
+
+    def correlate_events_for_node(
+        self,
+        node_id: str,
+        window_seconds: float = 3600.0,
+        reference_timestamp: Optional[float] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieves recent change events for a specific CI node within the time window.
+        """
+        ref_ts = reference_timestamp or time.time()
+        results = []
+        for event in self.events:
+            if event.node_id != node_id:
+                continue
+            delta = ref_ts - event.timestamp
+            if delta < -60.0 or delta > window_seconds:
+                continue
+            decay = math.exp(-0.693147 * (max(0.0, delta) / self.half_life_seconds))
+            results.append({
+                "event": event,
+                "decay_score": round(decay, 3),
+                "age_minutes": round(delta / 60.0, 1)
+            })
+        results.sort(key=lambda x: x["decay_score"], reverse=True)
+        return results
+

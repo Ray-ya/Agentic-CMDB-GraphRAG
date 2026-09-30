@@ -30,12 +30,13 @@ from canary_evaluator import CanarySLIEvaluator, CanaryEvaluationResult, SLIMetr
 from backpressure_governor import DependencyBackpressureGovernor, NodeHealthMetrics, BackpressureDirective, CircuitState
 from chaos_resilience_simulator import ChaosResilienceSimulator, ChaosExperimentSpec, FaultType, ChaosSimulationReport
 from digital_twin_sandbox import DigitalTwinShadowSandbox, SyntheticRunbook, SandboxActionType, ShadowSimulationResult
+from tot_counterfactual_reasoner import ToTCounterfactualReasoner, ToTReasoningReport, HypothesisCategory, HypothesisStatus
 from datetime import datetime, timezone
 
 app = FastAPI(
     title="Agentic-CMDB-GraphRAG API Gateway",
-    description="Enterprise SRE Root-Cause Analysis and Topology-Grounded GraphRAG System with Temporal Correlation, Multi-Modal Telemetry & Drift Reconciler",
-    version="1.6.0"
+    description="Enterprise SRE Root-Cause Analysis and Topology-Grounded GraphRAG System with Temporal Correlation, Multi-Modal Telemetry, Drift Reconciler & ToT Reasoner",
+    version="1.7.0"
 )
 
 # Global system state
@@ -52,6 +53,7 @@ canary_evaluator = CanarySLIEvaluator()
 backpressure_governor = DependencyBackpressureGovernor(topology)
 chaos_simulator = ChaosResilienceSimulator(topology)
 digital_twin_sandbox = DigitalTwinShadowSandbox(topology)
+tot_reasoner = ToTCounterfactualReasoner(topology, telemetry_engine, correlator)
 
 
 class AlertWebhookPayload(BaseModel):
@@ -462,6 +464,28 @@ def list_sandbox_simulations():
         "total_simulations": len(digital_twin_sandbox.active_simulations),
         "simulations": [asdict(s) for s in digital_twin_sandbox.active_simulations.values()]
     }
+
+
+class ToTReasoningPayload(BaseModel):
+    symptom_node_id: str = Field(..., example="svc-order")
+    alert_name: str = Field(..., example="HTTP504_Payment_Timeout")
+    incident_id: Optional[str] = None
+
+
+@app.post("/api/v1/reasoning/tot-counterfactual")
+def evaluate_tot_counterfactual_reasoning(payload: ToTReasoningPayload):
+    """
+    Pillar 17: Executes Multi-Hypothesis Tree-of-Thought (ToT) Counterfactual Reasoning.
+    Formulates competing failure hypotheses across topological tiers, performs counterfactual
+    falsification against telemetry/mutations, and computes Bayesian posterior confidence probabilities.
+    """
+    report = tot_reasoner.run_reasoning_tree(
+        symptom_node_id=payload.symptom_node_id,
+        alert_name=payload.alert_name,
+        incident_id=payload.incident_id
+    )
+    return asdict(report)
+
 
 
 

@@ -780,8 +780,66 @@ def run_tests():
     assert r_list.json()["total_simulations"] >= 1
     print("   [PASS] REST API /api/v1/sandbox/simulate-runbook & simulations responded HTTP 200 OK.")
 
+    # ---------------------------------------------------------
+    # Pillar 17: Multi-Hypothesis Tree-of-Thought (ToT) Counterfactual Reasoner & Bayesian Confidence Estimator
+    # ---------------------------------------------------------
+    print("\n[Pillar 17] Testing Multi-Hypothesis Tree-of-Thought (ToT) Counterfactual Reasoner...")
+    from tot_counterfactual_reasoner import (
+        ToTCounterfactualReasoner,
+        HypothesisCategory,
+        HypothesisStatus,
+        HypothesisNode
+    )
+
+    reasoner = ToTCounterfactualReasoner(topo, telemetry_eng, correlator)
+
+    # 17.1 Generate competing hypotheses along upstream dependency path
+    hyps = reasoner.generate_competing_hypotheses("svc-order", "HTTP504_Payment_Timeout")
+    assert len(hyps) >= 3
+    cat_set = {h.category for h in hyps}
+    assert HypothesisCategory.DATABASE_EXHAUSTION in cat_set
+    assert HypothesisCategory.DEPLOYMENT_REGRESSION in cat_set
+    print(f"   [PASS] Generated {len(hyps)} competing hypotheses across failure categories: {[c.value for c in cat_set]}.")
+
+    # 17.2 Counterfactual Testing & Falsification check
+    fake_hyp = HypothesisNode(
+        hypothesis_id="HYP-FAKE",
+        category=HypothesisCategory.DEPLOYMENT_REGRESSION,
+        target_ci_id="non-existent-service-999",
+        target_ci_name="Non Existent Service",
+        statement="Recent deployment broke non-existent service",
+        prior_probability=0.20
+    )
+    reasoner.evaluate_counterfactuals_and_evidence(fake_hyp, "svc-order")
+    assert fake_hyp.is_falsified is True
+    assert fake_hyp.status == HypothesisStatus.REFUTED
+    print(f"   [PASS] Falsification check correctly refuted invalid hypothesis: {fake_hyp.falsification_reason}")
+
+    # 17.3 Full Tree-of-Thought Reasoning Pipeline
+    tot_report = reasoner.run_reasoning_tree("svc-order", "HTTP504_Payment_Timeout")
+    assert tot_report.total_hypotheses_evaluated >= 3
+    assert tot_report.winning_hypothesis is not None
+    assert tot_report.winning_hypothesis.status == HypothesisStatus.ACCEPTED
+    assert tot_report.posterior_confidence_pct > 50.0
+    assert len(tot_report.reasoning_tree_ascii) > 50
+    assert "Tree-of-Thought RCA Exploration" in tot_report.reasoning_tree_ascii
+    print(f"   [PASS] Tree-of-Thought Search selected winner: {tot_report.winning_hypothesis.statement} (Posterior: {tot_report.posterior_confidence_pct}%)")
+    print(f"   [PASS] Pruned {tot_report.pruned_hypotheses_count}/{tot_report.total_hypotheses_evaluated} falsified/low-probability branches.")
+
+    # 17.4 REST API /api/v1/reasoning/tot-counterfactual
+    r_tot = client.post("/api/v1/reasoning/tot-counterfactual", json={
+        "symptom_node_id": "svc-order",
+        "alert_name": "HTTP504_Payment_Timeout"
+    })
+    assert r_tot.status_code == 200
+    tot_data = r_tot.json()
+    assert tot_data["winning_hypothesis"] is not None
+    assert tot_data["posterior_confidence_pct"] > 50.0
+    assert "reasoning_tree_ascii" in tot_data
+    print("   [PASS] REST API /api/v1/reasoning/tot-counterfactual responded HTTP 200 OK.")
+
     print("\n" + "=" * 70)
-    print(">> [SUCCESS] All 16 Verification Pillars Passed with Exit Code 0!")
+    print(">> [SUCCESS] All 17 Verification Pillars Passed with Exit Code 0!")
     print("=" * 70)
 
 

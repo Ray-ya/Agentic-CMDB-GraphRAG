@@ -31,6 +31,13 @@ from backpressure_governor import DependencyBackpressureGovernor, NodeHealthMetr
 from chaos_resilience_simulator import ChaosResilienceSimulator, ChaosExperimentSpec, FaultType, ChaosSimulationReport
 from digital_twin_sandbox import DigitalTwinShadowSandbox, SyntheticRunbook, SandboxActionType, ShadowSimulationResult
 from tot_counterfactual_reasoner import ToTCounterfactualReasoner, ToTReasoningReport, HypothesisCategory, HypothesisStatus
+from cascading_failure_forecaster import (
+    CascadingFailureForecaster,
+    CascadingForecastReport,
+    TopologicalMotifType,
+    CascadeRiskTier,
+    PreventiveActionType
+)
 from datetime import datetime, timezone
 
 app = FastAPI(
@@ -54,6 +61,7 @@ backpressure_governor = DependencyBackpressureGovernor(topology)
 chaos_simulator = ChaosResilienceSimulator(topology)
 digital_twin_sandbox = DigitalTwinShadowSandbox(topology)
 tot_reasoner = ToTCounterfactualReasoner(topology, telemetry_engine, correlator)
+cascading_forecaster = CascadingFailureForecaster(topology, telemetry_engine, correlator)
 
 
 class AlertWebhookPayload(BaseModel):
@@ -485,6 +493,57 @@ def evaluate_tot_counterfactual_reasoning(payload: ToTReasoningPayload):
         incident_id=payload.incident_id
     )
     return asdict(report)
+
+
+class CascadingForecastPayload(BaseModel):
+    epicenter_ci_id: str = Field(..., example="db-postgres-pay")
+    initial_severity: Optional[float] = Field(default=0.9, example=0.9)
+    rpc_timeout_sec: Optional[float] = Field(default=5.0, example=5.0)
+
+
+class PreventiveCircuitBreakPayload(BaseModel):
+    epicenter_ci_id: str = Field(..., example="db-postgres-pay")
+    auto_apply: Optional[bool] = False
+
+
+@app.post("/api/v1/forecast/cascading-propagation")
+def forecast_cascading_propagation(payload: CascadingForecastPayload):
+    """
+    Pillar 18: Simulates topological epidemic percolation failure propagation,
+    classifies failure motif (FANOUT, PIPELINE, DIAMOND, DEADLOCK), projects multi-stage
+    TTC collapse timeline and SLA error budget burn rates.
+    """
+    try:
+        report = cascading_forecaster.forecast_cascading_failure(
+            epicenter_ci_id=payload.epicenter_ci_id,
+            initial_severity=payload.initial_severity or 0.9,
+            rpc_timeout_sec=payload.rpc_timeout_sec or 5.0
+        )
+        return asdict(report)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.post("/api/v1/forecast/preventive-circuit-break")
+def execute_preventive_circuit_break(payload: PreventiveCircuitBreakPayload):
+    """
+    Pillar 18: Computes the minimum-cut topological containment mesh,
+    generating proactive circuit trips, speculative traffic shedding, and cache fallbacks.
+    """
+    try:
+        report = cascading_forecaster.forecast_cascading_failure(epicenter_ci_id=payload.epicenter_ci_id)
+        return {
+            "epicenter_ci_id": payload.epicenter_ci_id,
+            "detected_motif": report.detected_motif.value,
+            "containment_efficacy_pct": report.containment_efficacy_pct,
+            "preventive_actions": [asdict(a) for a in report.preventive_actions],
+            "uncontained_blast_radius": report.uncontained_blast_radius,
+            "contained_blast_radius": report.contained_blast_radius,
+            "auto_applied": payload.auto_apply or False
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
 
 
 

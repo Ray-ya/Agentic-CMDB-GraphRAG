@@ -838,8 +838,81 @@ def run_tests():
     assert "reasoning_tree_ascii" in tot_data
     print("   [PASS] REST API /api/v1/reasoning/tot-counterfactual responded HTTP 200 OK.")
 
+    # ---------------------------------------------------------
+    # Pillar 18: Cascading Failure Propagation Forecaster & Preventive Circuit-Breaker Mesh
+    # ---------------------------------------------------------
+    print("\n[Pillar 18] Testing Cascading Failure Propagation Forecaster & Circuit-Breaker Mesh...")
+    from cascading_failure_forecaster import (
+        CascadingFailureForecaster,
+        TopologicalMotifType,
+        CascadeRiskTier,
+        PreventiveActionType
+    )
+
+    forecaster = CascadingFailureForecaster(topo, telemetry_eng, correlator)
+
+    # 18.1 Test Topological Motif Detection & Percolation Forecasting
+    fcst_report = forecaster.forecast_cascading_failure(
+        epicenter_ci_id="db-postgres-pay",
+        initial_severity=0.9,
+        rpc_timeout_sec=5.0
+    )
+    assert fcst_report.epicenter_ci_id == "db-postgres-pay"
+    assert fcst_report.detected_motif == TopologicalMotifType.DIAMOND_BOTTLENECK
+    assert fcst_report.motif_confidence >= 0.80
+    assert fcst_report.uncontained_blast_radius >= 4
+    assert len(fcst_report.projected_collapses) >= 4
+    # Check that direct callers have lower TTC than edge tiers
+    hop1_items = [p for p in fcst_report.projected_collapses if p.hop_distance == 1]
+    hop3_items = [p for p in fcst_report.projected_collapses if p.hop_distance >= 3]
+    assert len(hop1_items) >= 2
+    assert all(h1.estimated_ttc_seconds < h3.estimated_ttc_seconds for h1 in hop1_items for h3 in hop3_items)
+    print(f"   [PASS] Topological percolation forecast: Motif={fcst_report.detected_motif.value} (Confidence: {fcst_report.motif_confidence*100:.1f}%)")
+    print(f"   [PASS] Uncontained blast radius: {fcst_report.uncontained_blast_radius} nodes (Direct callers: {len(hop1_items)})")
+
+    # 18.2 Test Forward-Looking Multi-Tier Timeline & Burn Rate Stages
+    assert len(fcst_report.timeline_stages) == 3
+    assert fcst_report.timeline_stages[0].stage_index == 1
+    assert fcst_report.timeline_stages[2].cumulative_sla_burn_rate_pct_per_hr > 200.0
+    print(f"   [PASS] 3-Stage Cascading Timeline generated: Peak SLO burn rate {fcst_report.timeline_stages[2].cumulative_sla_burn_rate_pct_per_hr}%/hr at T+90s.")
+
+    # 18.3 Test Preventive Circuit-Breaker Mesh & Traffic Shedding
+    assert len(fcst_report.preventive_actions) >= 3
+    act_types = {a.action_type for a in fcst_report.preventive_actions}
+    assert PreventiveActionType.TRIP_CIRCUIT_BREAKER in act_types
+    assert PreventiveActionType.FORCE_LOCAL_CACHE_FALLBACK in act_types
+    assert fcst_report.containment_efficacy_pct >= 50.0
+    print(f"   [PASS] Preventive circuit containment synthesized: {len(fcst_report.preventive_actions)} actions, Efficacy: {fcst_report.containment_efficacy_pct}% reduction.")
+
+    # 18.4 Test Domino Cascade ASCII Rendering
+    assert len(fcst_report.domino_cascade_ascii) > 100
+    assert "CASCADING FAILURE PROPAGATION FORECAST" in fcst_report.domino_cascade_ascii
+    assert "PREVENTIVE CIRCUIT-BREAKER CONTAINMENT CUT" in fcst_report.domino_cascade_ascii
+    print("   [PASS] Domino cascade ASCII visualization rendered successfully.")
+
+    # 18.5 Test REST API /api/v1/forecast/cascading-propagation & /preventive-circuit-break
+    r_fcst = client.post("/api/v1/forecast/cascading-propagation", json={
+        "epicenter_ci_id": "db-postgres-pay",
+        "initial_severity": 0.9,
+        "rpc_timeout_sec": 5.0
+    })
+    assert r_fcst.status_code == 200
+    fcst_data = r_fcst.json()
+    assert fcst_data["detected_motif"] == "DIAMOND_BOTTLENECK"
+    assert len(fcst_data["projected_collapses"]) >= 4
+
+    r_cb = client.post("/api/v1/forecast/preventive-circuit-break", json={
+        "epicenter_ci_id": "db-postgres-pay",
+        "auto_apply": False
+    })
+    assert r_cb.status_code == 200
+    cb_data = r_cb.json()
+    assert cb_data["containment_efficacy_pct"] >= 50.0
+    assert len(cb_data["preventive_actions"]) >= 3
+    print("   [PASS] REST API /api/v1/forecast/cascading-propagation & /preventive-circuit-break responded HTTP 200 OK.")
+
     print("\n" + "=" * 70)
-    print(">> [SUCCESS] All 17 Verification Pillars Passed with Exit Code 0!")
+    print(">> [SUCCESS] All 18 Verification Pillars Passed with Exit Code 0!")
     print("=" * 70)
 
 

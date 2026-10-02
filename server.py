@@ -38,6 +38,13 @@ from cascading_failure_forecaster import (
     CascadeRiskTier,
     PreventiveActionType
 )
+from trace_causal_discovery import (
+    TraceCausalDiscoveryEngine,
+    TraceSpan,
+    CausalDiscoveryReport,
+    CausalNodeRole,
+    generate_mock_incident_trace_spans
+)
 from datetime import datetime, timezone
 
 app = FastAPI(
@@ -62,6 +69,7 @@ chaos_simulator = ChaosResilienceSimulator(topology)
 digital_twin_sandbox = DigitalTwinShadowSandbox(topology)
 tot_reasoner = ToTCounterfactualReasoner(topology, telemetry_engine, correlator)
 cascading_forecaster = CascadingFailureForecaster(topology, telemetry_engine, correlator)
+causal_discovery_engine = TraceCausalDiscoveryEngine(topology)
 
 
 class AlertWebhookPayload(BaseModel):
@@ -543,6 +551,64 @@ def execute_preventive_circuit_break(payload: PreventiveCircuitBreakPayload):
         }
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+class TraceSpanInput(BaseModel):
+    trace_id: str
+    span_id: str
+    parent_span_id: Optional[str] = None
+    service_id: str
+    service_name: str
+    operation_name: str
+    duration_ms: float
+    status_code: Optional[str] = "OK"
+    timestamp: Optional[float] = None
+    attributes: Optional[Dict[str, Any]] = Field(default_factory=dict)
+
+
+class CausalDiscoveryPayload(BaseModel):
+    incident_id: Optional[str] = None
+    spans: Optional[List[TraceSpanInput]] = None
+    independence_alpha_threshold: Optional[float] = 0.25
+
+
+@app.post("/api/v1/causal/discover-traces")
+def discover_trace_causal_dag(payload: CausalDiscoveryPayload):
+    """
+    Pillar 19: Topologically-Grounded Semantic Trace Causal Discovery & Directed Acyclic Graph (DAG) Causal Attribution.
+    Decomposes distributed traces into exclusive self-latency, eliminates Confounder Biases via conditional
+    independence testing, and calculates normalized Causal Attribution Scores (CAS %).
+    """
+    if payload.spans and len(payload.spans) > 0:
+        spans_obj = [
+            TraceSpan(
+                trace_id=s.trace_id,
+                span_id=s.span_id,
+                parent_span_id=s.parent_span_id,
+                service_id=s.service_id,
+                service_name=s.service_name,
+                operation_name=s.operation_name,
+                duration_ms=s.duration_ms,
+                status_code=s.status_code or "OK",
+                timestamp=s.timestamp or time.time(),
+                attributes=s.attributes or {}
+            )
+            for s in payload.spans
+        ]
+    else:
+        # Use synthetic trace dataset if no raw traces passed
+        spans_obj = generate_mock_incident_trace_spans(num_traces=25)
+
+    try:
+        report = causal_discovery_engine.discover_causal_dag(
+            spans=spans_obj,
+            incident_id=payload.incident_id,
+            independence_alpha_threshold=payload.independence_alpha_threshold or 0.25
+        )
+        return asdict(report)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
 
 
 

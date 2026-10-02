@@ -911,8 +911,71 @@ def run_tests():
     assert len(cb_data["preventive_actions"]) >= 3
     print("   [PASS] REST API /api/v1/forecast/cascading-propagation & /preventive-circuit-break responded HTTP 200 OK.")
 
+    # ---------------------------------------------------------
+    # Pillar 19: Topologically-Grounded Semantic Trace Causal Discovery & DAG Causal Attribution
+    # ---------------------------------------------------------
+    print("\n[Pillar 19] Testing Semantic Trace Causal Discovery & DAG Causal Attribution...")
+    from trace_causal_discovery import (
+        TraceCausalDiscoveryEngine,
+        CausalNodeRole,
+        generate_mock_incident_trace_spans
+    )
+
+    causal_engine = TraceCausalDiscoveryEngine(topo)
+    test_spans = generate_mock_incident_trace_spans(num_traces=25)
+    assert len(test_spans) == 150, "Should generate 150 spans (25 traces x 6 CIs)"
+
+    # 19.1 Test Span Decomposition: Self-Latency vs Total-Latency
+    decomposed = causal_engine.decompose_trace_spans(test_spans)
+    assert "db-postgres-pay" in decomposed
+    assert "svc-order" in decomposed
+    assert "ing-01" in decomposed
+    # DB must have high self latency ratio (> 95%)
+    assert decomposed["db-postgres-pay"].self_latency_ratio > 0.95
+    # Order service and Ingress must have low self latency ratio (< 15%) because they wait on DB
+    assert decomposed["svc-order"].self_latency_ratio < 0.15
+    assert decomposed["ing-01"].self_latency_ratio < 0.10
+    print(f"   [PASS] Span Decomposition verified: Culprit DB self-latency ratio={decomposed['db-postgres-pay'].self_latency_ratio*100:.1f}%, Ingress self-latency ratio={decomposed['ing-01'].self_latency_ratio*100:.1f}%.")
+
+    # 19.2 Full Causal Discovery DAG Pipeline
+    causal_report = causal_engine.discover_causal_dag(test_spans)
+    assert causal_report.isolated_root_cause_ci == "db-postgres-pay"
+    assert causal_report.root_cause_confidence_pct >= 90.0
+    assert causal_report.spurious_correlations_eliminated >= 5, "Conditional independence must prune spurious edges"
+
+    # Verify Causal Roles
+    roles = {attr.ci_id: attr.role for attr in causal_report.node_attributions}
+    assert roles["db-postgres-pay"] == CausalNodeRole.ROOT_CAUSE_DRIVER
+    assert roles["svc-order"] == CausalNodeRole.PROPAGATION_VICTIM
+    assert roles["ing-01"] == CausalNodeRole.PROPAGATION_VICTIM
+    assert roles["svc-inventory"] in (CausalNodeRole.CONFOUNDED_OBSERVER, CausalNodeRole.HEALTHY_BASELINE)
+
+    # Top driver CAS % should dominate (> 85%)
+    top_attr = next(a for a in causal_report.node_attributions if a.ci_id == "db-postgres-pay")
+    assert top_attr.causal_attribution_score_pct >= 85.0
+    print(f"   [PASS] Causal Discovery isolated '{causal_report.isolated_root_cause_name}' as ROOT_CAUSE_DRIVER with CAS={top_attr.causal_attribution_score_pct:.2f}% (Confidence: {causal_report.root_cause_confidence_pct:.1f}%).")
+    print(f"   [PASS] Confounder Bias eliminated: {causal_report.spurious_correlations_eliminated} false-correlation edges pruned via Fisher's Z conditional independence.")
+
+    # 19.3 Verify ASCII Causal DAG visualization
+    assert len(causal_report.ascii_causal_dag) > 100
+    assert "TOPOLOGICALLY-GROUNDED CAUSAL DISCOVERY" in causal_report.ascii_causal_dag
+    assert "ROOT CAUSE DRIVER" in causal_report.ascii_causal_dag
+    print("   [PASS] Explainable ASCII Causal DAG visualization rendered successfully.")
+
+    # 19.4 REST API /api/v1/causal/discover-traces
+    r_causal = client.post("/api/v1/causal/discover-traces", json={
+        "incident_id": "INC-TEST-CAUSAL-01",
+        "independence_alpha_threshold": 0.25
+    })
+    assert r_causal.status_code == 200
+    c_data = r_causal.json()
+    assert c_data["isolated_root_cause_ci"] == "db-postgres-pay"
+    assert c_data["root_cause_confidence_pct"] >= 90.0
+    assert len(c_data["node_attributions"]) >= 5
+    print("   [PASS] REST API /api/v1/causal/discover-traces responded HTTP 200 OK.")
+
     print("\n" + "=" * 70)
-    print(">> [SUCCESS] All 18 Verification Pillars Passed with Exit Code 0!")
+    print(">> [SUCCESS] All 19 Verification Pillars Passed with Exit Code 0!")
     print("=" * 70)
 
 

@@ -1,6 +1,6 @@
 # Agentic-CMDB-GraphRAG: Topology-Grounded SRE Agent with Multi-Modal Telemetry & Temporal Change Correlation
 
-[![Test Status](https://img.shields.io/badge/tests-19%20pillars%20passing-brightgreen.svg)](test_suite.py)
+[![Test Status](https://img.shields.io/badge/tests-20%20pillars%20passing-brightgreen.svg)](test_suite.py)
 [![Architecture](https://img.shields.io/badge/architecture-Dual--Level%20GraphRAG-blue.svg)](dual_level_graphrag.py)
 [![FastAPI](https://img.shields.io/badge/FastAPI-v1.7.0-009688.svg)](server.py)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
@@ -107,3 +107,4 @@ python test_suite.py
 - **Pillar 17**: Multi-Hypothesis Tree-of-Thought (ToT) Counterfactual Reasoner & Bayesian Confidence Estimator (`tot_counterfactual_reasoner.py`)
 - **Pillar 18**: Topologically-Grounded Cascading Failure Propagation Forecaster & Preventive Circuit-Breaker Mesh (`cascading_failure_forecaster.py`)
 - **Pillar 19**: Topologically-Grounded Semantic Trace Causal Discovery & Directed Acyclic Graph (DAG) Causal Attribution Mesh (`trace_causal_discovery.py`)
+- **Pillar 20**: Topologically-Grounded Multi-Window Multi-Burn-Rate (MWMBR) SLO Governor & Automated Graceful Load-Shedding Mesh (`slo_burn_governor.py`)

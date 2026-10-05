@@ -974,8 +974,102 @@ def run_tests():
     assert len(c_data["node_attributions"]) >= 5
     print("   [PASS] REST API /api/v1/causal/discover-traces responded HTTP 200 OK.")
 
+    # ---------------------------------------------------------
+    # Pillar 20: Topologically-Grounded Multi-Window Multi-Burn-Rate (MWMBR) SLO Governor
+    # ---------------------------------------------------------
+    print("\n[Pillar 20] Testing Multi-Window Multi-Burn-Rate (MWMBR) SLO Governor & Load Shedding...")
+    from slo_burn_governor import (
+        SLOBurnBudgetGovernor,
+        CUJTier,
+        BurnRateAlertTier,
+        SheddingActionType
+    )
+
+    slo_gov = SLOBurnBudgetGovernor(topo)
+
+    # 20.1 Test CUJ Catalog Registration
+    assert len(slo_gov.cujs) == 3
+    assert "cuj-checkout-payment" in slo_gov.cujs
+    checkout_cuj = slo_gov.cujs["cuj-checkout-payment"]
+    assert checkout_cuj.tier == CUJTier.TIER_1_MISSION_CRITICAL
+    assert checkout_cuj.total_budget_percentage == 0.1  # 100 - 99.9%
+    print(f"   [PASS] CUJ Topology Catalog verified: {len(slo_gov.cujs)} CUJs mapped to CMDB dependencies.")
+
+    # 20.2 Test MWMBR Mathematical Alerting (P1 Critical: 14.4x burn rate)
+    # Target SLO: 99.9% -> Budget: 0.1%. Error rate 1.8% -> Burn rate = 18.0x
+    burn_status_p1 = slo_gov.evaluate_cuj_burn_status(
+        cuj=checkout_cuj,
+        observed_1h_error_pct=1.8,
+        observed_5m_error_pct=2.0,
+        observed_6h_error_pct=1.2,
+        remaining_budget_pct=60.0,
+        unhealthy_cis=["db-postgres-pay"]
+    )
+    assert burn_status_p1.burn_rate_1h == 18.0
+    assert burn_status_p1.alert_tier == BurnRateAlertTier.P1_PAGE_CRITICAL
+    assert burn_status_p1.is_exhaustion_imminent is True
+    # 60% budget / (18x burn) over 720h = 0.6 * 720 / 18 = 24.0 hours
+    assert burn_status_p1.estimated_tte_hours <= 25.0
+    assert "db-postgres-pay" in burn_status_p1.implicated_root_cis
+    print(f"   [PASS] MWMBR Critical Burn Rate isolated: {burn_status_p1.burn_rate_1h}x (Alert Tier: {burn_status_p1.alert_tier.value}, TTE: {burn_status_p1.estimated_tte_hours}h).")
+
+    # 20.3 Test Topological Load-Shedding Synthesis
+    directives = slo_gov.synthesize_load_shedding_directives([burn_status_p1])
+    assert len(directives) == 3
+    dir_actions = {d.ci_id: d.action_type for d in directives}
+    assert dir_actions["svc-recommendation"] == SheddingActionType.SERVE_STATIC_FALLBACK_CACHE
+    assert dir_actions["svc-inventory"] == SheddingActionType.RATE_LIMIT_TOKEN_BUCKET
+    assert dir_actions["svc-payment"] == SheddingActionType.FULL_PRIORITY_PRESERVATION
+
+    # Check Tier 3 traffic shed ratio >= 90%
+    rec_directive = next(d for d in directives if d.ci_id == "svc-recommendation")
+    assert rec_directive.traffic_shed_pct >= 90.0
+    print(f"   [PASS] Graceful Load-Shedding Matrix synthesized: Tier-3 shed {rec_directive.traffic_shed_pct}%, Tier-1 preserved.")
+
+    # 20.4 Test Post-Shedding Projection & Lifespan Extension
+    avg_shed, proj_burn, ext_tte, ext_pct = slo_gov.calculate_post_shed_projections(
+        current_max_burn=burn_status_p1.burn_rate_1h,
+        current_min_tte=burn_status_p1.estimated_tte_hours,
+        directives=directives
+    )
+    assert proj_burn < burn_status_p1.burn_rate_1h
+    assert ext_tte > burn_status_p1.estimated_tte_hours
+    assert ext_pct > 50.0  # At least 50% lifespan expansion
+    print(f"   [PASS] Budget Lifespan Expansion verified: TTE extended from {burn_status_p1.estimated_tte_hours}h -> {ext_tte}h (+{ext_pct:.1f}% extension).")
+
+    # 20.5 Test Full End-to-End Governance Report & ASCII Gauge
+    full_report = slo_gov.govern_slo_burn(
+        cuj_telemetry={
+            "cuj-checkout-payment": {"err_1h": 1.8, "err_5m": 2.0, "err_6h": 1.2, "rem_budget": 60.0},
+            "cuj-order-inquiry": {"err_1h": 0.2, "err_5m": 0.2, "err_6h": 0.1, "rem_budget": 90.0},
+            "cuj-personalized-recommendation": {"err_1h": 0.5, "err_5m": 0.5, "err_6h": 0.3, "rem_budget": 98.0}
+        },
+        unhealthy_cis=["db-postgres-pay"]
+    )
+    assert full_report.overall_alert_tier == BurnRateAlertTier.P1_PAGE_CRITICAL
+    assert len(full_report.ascii_gauge_matrix) > 100
+    assert "GOOGLE SRE MULTI-WINDOW MULTI-BURN-RATE" in full_report.ascii_gauge_matrix
+    print("   [PASS] Executive ASCII SLO Burn Gauge rendered successfully.")
+
+    # 20.6 Test REST API /api/v1/slo/evaluate-burn & /api/v1/slo/cuj-catalog
+    r_slo_cat = client.get("/api/v1/slo/cuj-catalog")
+    assert r_slo_cat.status_code == 200
+    assert len(r_slo_cat.json()) == 3
+
+    r_slo_eval = client.post("/api/v1/slo/evaluate-burn", json={
+        "cuj_telemetry": {
+            "cuj-checkout-payment": {"err_1h": 1.8, "err_5m": 2.0, "err_6h": 1.2, "rem_budget": 60.0}
+        },
+        "unhealthy_cis": ["db-postgres-pay"]
+    })
+    assert r_slo_eval.status_code == 200
+    slo_data = r_slo_eval.json()
+    assert slo_data["overall_alert_tier"] == "P1_PAGE_CRITICAL"
+    assert slo_data["budget_life_extension_pct"] > 50.0
+    print("   [PASS] REST API /api/v1/slo endpoints (cuj-catalog, evaluate-burn) responded HTTP 200 OK.")
+
     print("\n" + "=" * 70)
-    print(">> [SUCCESS] All 19 Verification Pillars Passed with Exit Code 0!")
+    print(">> [SUCCESS] All 20 Verification Pillars Passed with Exit Code 0!")
     print("=" * 70)
 
 

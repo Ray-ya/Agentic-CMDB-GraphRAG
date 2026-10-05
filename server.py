@@ -45,6 +45,13 @@ from trace_causal_discovery import (
     CausalNodeRole,
     generate_mock_incident_trace_spans
 )
+from slo_burn_governor import (
+    SLOBurnBudgetGovernor,
+    CriticalUserJourney,
+    CUJTier,
+    BurnRateAlertTier,
+    SLOBurnGovernanceReport
+)
 from datetime import datetime, timezone
 
 app = FastAPI(
@@ -70,6 +77,7 @@ digital_twin_sandbox = DigitalTwinShadowSandbox(topology)
 tot_reasoner = ToTCounterfactualReasoner(topology, telemetry_engine, correlator)
 cascading_forecaster = CascadingFailureForecaster(topology, telemetry_engine, correlator)
 causal_discovery_engine = TraceCausalDiscoveryEngine(topology)
+slo_governor = SLOBurnBudgetGovernor(topology)
 
 
 class AlertWebhookPayload(BaseModel):
@@ -608,6 +616,48 @@ def discover_trace_causal_dag(payload: CausalDiscoveryPayload):
         return asdict(report)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+class SLOBurnPayload(BaseModel):
+    cuj_telemetry: Optional[Dict[str, Dict[str, float]]] = None
+    unhealthy_cis: Optional[List[str]] = None
+
+
+@app.post("/api/v1/slo/evaluate-burn")
+def evaluate_slo_burn_budget(payload: SLOBurnPayload):
+    """
+    Pillar 20: Topologically-Grounded Multi-Window Multi-Burn-Rate (MWMBR) SLO Governor.
+    Evaluates 1h and 6h error budget burn rates against Google SRE alerting criteria,
+    estimates Time-to-Exhaustion (TTE), and synthesizes tiered load-shedding directives.
+    """
+    telemetry = payload.cuj_telemetry or {
+        "cuj-checkout-payment": {"err_1h": 1.8, "err_5m": 2.2, "err_6h": 0.9, "rem_budget": 65.0},
+        "cuj-order-inquiry": {"err_1h": 0.6, "err_5m": 0.5, "err_6h": 0.4, "rem_budget": 80.0},
+        "cuj-personalized-recommendation": {"err_1h": 0.1, "err_5m": 0.1, "err_6h": 0.1, "rem_budget": 95.0}
+    }
+    report = slo_governor.govern_slo_burn(
+        cuj_telemetry=telemetry,
+        unhealthy_cis=payload.unhealthy_cis
+    )
+    return asdict(report)
+
+
+@app.get("/api/v1/slo/cuj-catalog")
+def get_cuj_catalog():
+    """
+    Returns registered Critical User Journeys (CUJ) mapped to CMDB CIs and SLO boundaries.
+    """
+    return [
+        {
+            "cuj_id": c.cuj_id,
+            "name": c.name,
+            "tier": c.tier.value,
+            "target_slo_pct": c.target_slo_pct,
+            "participating_ci_ids": c.participating_ci_ids
+        }
+        for c in slo_governor.cujs.values()
+    ]
+
 
 
 

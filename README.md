@@ -11,6 +11,8 @@ An Enterprise SRE Root-Cause Analysis (RCA) and Autonomous Remediation Engine po
 
 ## 🌟 Architectural Overview
 
+- 📖 **Featured In-Depth Article**: [架構師手記：超越傳統向量檢索——從 Dual-Level GraphRAG 到 SMT 形式化不變量驗證與基因演化式 SRE 自主修復全鏈路實踐 (2026-11-23)](docs/INSIGHTS_DUAL_GRAPH_RAG_SMT.md)
+
 ```
                           [ Prometheus / Datadog / K8s Events / OTel Spans ]
                                                   │

@@ -1068,8 +1068,224 @@ def run_tests():
     assert slo_data["budget_life_extension_pct"] > 50.0
     print("   [PASS] REST API /api/v1/slo endpoints (cuj-catalog, evaluate-burn) responded HTTP 200 OK.")
 
+    # ---------------------------------------------------------
+    # Pillar 21: Formal SMT-Grounded Invariant Verifier & Safe Staging
+    # ---------------------------------------------------------
+    print("\n[Pillar 21] Testing Formal SMT Invariant Verifier & Safe Staging...")
+    from formal_invariant_verifier import (
+        FormalSMTInvariantVerifier,
+        RemediationActionSpec,
+        ActionType,
+        VerificationVerdict,
+        InvariantType
+    )
+
+    verifier = FormalSMTInvariantVerifier(topo, max_blast_radius_budget=5, min_headroom_safety_margin_pct=20.0)
+
+    # 21.1 Test Quorum Preservation Violation Detection (Raft Split-Brain Hazard)
+    unsafe_quorum_action = RemediationActionSpec(
+        action_id="ACT-UNSAFE-DB-DRAIN",
+        target_ci_id="db-postgres-pay",
+        action_type=ActionType.DRAIN_NODE,
+        command="kubectl drain node-db-01 --ignore-daemonsets",
+        is_destructive=True,
+        drained_instances=2,  # Total replicas 3, draining 2 leaves 1 < Quorum 2!
+        target_stage_index=0
+    )
+    rep_quorum = verifier.verify_remediation_plan("PLAN-QUORUM-TEST", [unsafe_quorum_action])
+    assert rep_quorum.verdict == VerificationVerdict.INVARIANT_VIOLATED
+    assert rep_quorum.is_safe_to_execute is False
+    assert any(cx.invariant_type == InvariantType.QUORUM_PRESERVATION for cx in rep_quorum.violation_counterexamples) is True
+    print("   [PASS] Quorum Preservation Invariant successfully blocked split-brain hazard (Drained 2/3 instances).")
+
+    # 21.2 Test Capacity Headroom Violation (Under-provisioned Pod drain)
+    unsafe_cap_action = RemediationActionSpec(
+        action_id="ACT-UNSAFE-SVC-SCALE",
+        target_ci_id="svc-payment",
+        action_type=ActionType.SCALE_DOWN,
+        command="kubectl scale deployment svc-payment --replicas=1",
+        is_destructive=True,
+        drained_instances=3,  # Total 4 -> 1 left: 1*400 RPS = 400 < Required 1100*1.2 = 1320 RPS
+        target_stage_index=0
+    )
+    rep_cap = verifier.verify_remediation_plan("PLAN-CAP-TEST", [unsafe_cap_action])
+    assert rep_cap.verdict == VerificationVerdict.INVARIANT_VIOLATED
+    assert any(cx.invariant_type == InvariantType.CAPACITY_HEADROOM_CONSERVATION for cx in rep_cap.violation_counterexamples) is True
+    print("   [PASS] Capacity Headroom Invariant blocked cascading load collapse (Surviving capacity < Ingress load).")
+
+    # 21.3 Test Mutual Exclusion Dependency Coupling
+    unsafe_mutex_actions = [
+        RemediationActionSpec(
+            action_id="ACT-RESTART-ORDER",
+            target_ci_id="svc-order",
+            action_type=ActionType.RESTART_POD,
+            command="kubectl rollout restart deployment/svc-order",
+            is_destructive=True,
+            target_stage_index=0
+        ),
+        RemediationActionSpec(
+            action_id="ACT-RESTART-PAYMENT",
+            target_ci_id="svc-payment",
+            action_type=ActionType.RESTART_POD,
+            command="kubectl rollout restart deployment/svc-payment",
+            is_destructive=True,
+            target_stage_index=0  # Same concurrent stage!
+        )
+    ]
+    rep_mutex = verifier.verify_remediation_plan("PLAN-MUTEX-TEST", unsafe_mutex_actions)
+    assert rep_mutex.verdict == VerificationVerdict.INVARIANT_VIOLATED
+    assert any(cx.invariant_type == InvariantType.MUTUAL_EXCLUSION_COUPLING for cx in rep_mutex.violation_counterexamples) is True
+    print("   [PASS] Mutual Exclusion Invariant detected circular dependency deadlock between coupled CIs.")
+
+    # 21.4 Test Automated SMT Staged Sequencing Repair
+    repaired_actions = verifier.synthesize_safe_staged_repair(unsafe_mutex_actions)
+    rep_repaired = verifier.verify_remediation_plan("PLAN-REPAIRED-TEST", repaired_actions)
+    assert rep_repaired.is_safe_to_execute is True
+    assert rep_repaired.verdict == VerificationVerdict.PROVABLY_SAFE
+    assert repaired_actions[0].target_stage_index != repaired_actions[1].target_stage_index
+    print("   [PASS] Automated SMT Staged Sequencing synthesized provably safe staggered execution DAG.")
+
+    # 21.5 Test Formal ASCII Proof Certificate Generation
+    cert = rep_repaired.ascii_proof_certificate
+    assert "FORMAL SMT INVARIANT VERIFICATION CERTIFICATE" in cert
+    assert "PROVABLY_SAFE" in cert
+    print("   [PASS] Formal ASCII Proof Certificate generated successfully.")
+
+    # 21.6 Test REST API /api/v1/verification/verify-invariants & /api/v1/verification/repair-plan
+    r_ver = client.post("/api/v1/verification/verify-invariants", json={
+        "plan_id": "REST-PLAN-01",
+        "actions": [{
+            "action_id": "REST-ACT-01",
+            "target_ci_id": "svc-payment",
+            "action_type": "RESTART_POD",
+            "command": "kubectl rollout restart deployment/svc-payment --maxSurge=1 --maxUnavailable=0",
+            "is_destructive": True,
+            "drained_instances": 0,
+            "target_stage_index": 0
+        }]
+    })
+    assert r_ver.status_code == 200
+    v_data = r_ver.json()
+    assert v_data["is_safe_to_execute"] is True
+    assert v_data["verdict"] == "PROVABLY_SAFE"
+
+    r_rep = client.post("/api/v1/verification/repair-plan", json={
+        "plan_id": "REST-PLAN-UNSAFE",
+        "actions": [
+            {
+                "action_id": "REST-ACT-01",
+                "target_ci_id": "svc-order",
+                "action_type": "RESTART_POD",
+                "command": "kubectl rollout restart deployment/svc-order",
+                "is_destructive": True,
+                "drained_instances": 1,
+                "target_stage_index": 0
+            },
+            {
+                "action_id": "REST-ACT-02",
+                "target_ci_id": "svc-payment",
+                "action_type": "RESTART_POD",
+                "command": "kubectl rollout restart deployment/svc-payment",
+                "is_destructive": True,
+                "drained_instances": 1,
+                "target_stage_index": 0
+            }
+        ]
+    })
+    assert r_rep.status_code == 200
+    r_data = r_rep.json()
+    assert r_data["is_safe_to_execute"] is True
+    assert r_data["repaired_action_count"] == 2
+    print("   [PASS] REST API /api/v1/verification endpoints (verify-invariants, repair-plan) responded HTTP 200 OK.")
+
+    # ---------------------------------------------------------
+    # Pillar 22: Autonomous Evolutionary Runbook Synthesizer & Trace Reflector
+    # ---------------------------------------------------------
+    print("\n[Pillar 22] Testing Evolutionary Runbook Synthesizer & Genetic SRE Optimization...")
+    from runbook_evolutionary_synthesizer import (
+        EvolutionaryRunbookSynthesizer,
+        FailureArchetype,
+        RunbookChromosome,
+        RunbookGene
+    )
+
+    evo_synthesizer = EvolutionaryRunbookSynthesizer(
+        topo=topo,
+        sandbox=sandbox,
+        formal_verifier=verifier,
+        kb=kb
+    )
+
+    # 22.1 Test Seed Population Creation
+    seeds = evo_synthesizer.create_seed_population(
+        target_ci_id="db-postgres-pay",
+        archetype=FailureArchetype.DATABASE_POOL_EXHAUSTION,
+        population_size=6
+    )
+    assert len(seeds) == 6
+    assert any("Graceful Pool Recycle" in s.name for s in seeds)
+    assert any("Force Kill" in s.name for s in seeds)
+    print(f"   [PASS] Seed population generated: {len(seeds)} candidate chromosomes initialized.")
+
+    # 22.2 Test Multi-Objective Fitness Evaluation
+    fit_graceful = evo_synthesizer.evaluate_fitness(seeds[0])
+    fit_kill = evo_synthesizer.evaluate_fitness(seeds[1])
+    assert fit_graceful > fit_kill  # Graceful should outperform dangerous force-kill
+    assert seeds[0].smt_invariant_passed is True
+    print(f"   [PASS] Multi-Objective Fitness verified: Graceful={fit_graceful:.1f} vs ForceKill={fit_kill:.1f} (SMT Safety & Blast Radius penalized).")
+
+    # 22.3 Test Crossover & Mutational Operators
+    child = evo_synthesizer.crossover(seeds[0], seeds[2])
+    assert child.generation == 1
+    assert len(child.genes) >= 2
+    log_m = evo_synthesizer._mutate_parameters(child)
+    assert len(child.genes) >= 2
+    print(f"   [PASS] Genetic Crossover & Mutation operators verified: Child={child.chromosome_id} ({log_m}).")
+
+    # 22.4 Test Generational Evolution & Auto-Promotion
+    evo_report = evo_synthesizer.evolve_population(
+        target_ci_id="db-postgres-pay",
+        archetype=FailureArchetype.DATABASE_POOL_EXHAUSTION,
+        generations=4,
+        population_size=6
+    )
+    assert evo_report.generations_count == 4
+    assert len(evo_report.generation_history) == 4
+    assert evo_report.best_runbook.fitness_score >= 60.0
+    assert evo_report.best_runbook.smt_invariant_passed is True
+    assert evo_report.promoted_to_kb is True
+    # Verify indexed in KB
+    kb_docs = kb.search("Graceful Pool", top_k=3)
+    assert any(d["doc_type"] == "EVOLVED_RUNBOOK" for d in kb_docs)
+    print(f"   [PASS] Multi-generational evolution converged: Best Fitness={evo_report.best_runbook.fitness_score}/100.0 (Promoted to KB: {evo_report.promoted_to_kb}).")
+    print(f"   [PASS] Stale runbooks pruned: {len(evo_report.pruned_runbook_ids)} sub-optimal variants retired.")
+
+    # 22.5 Test ASCII Evolution Tree Rendering
+    assert len(evo_report.ascii_evolution_tree) > 100
+    assert "AUTONOMOUS EVOLUTIONARY RUNBOOK SYNTHESIS REPORT" in evo_report.ascii_evolution_tree
+    assert "GENERATIONAL FITNESS TRAJECTORY" in evo_report.ascii_evolution_tree
+    print("   [PASS] ASCII Evolutionary Tree & Lineage rendered successfully.")
+
+    # 22.6 Test REST API /api/v1/runbooks/evolve & /api/v1/runbooks/population
+    r_evo = client.post("/api/v1/runbooks/evolve", json={
+        "target_ci_id": "db-postgres-pay",
+        "failure_archetype": "DATABASE_POOL_EXHAUSTION",
+        "generations": 3,
+        "population_size": 4
+    })
+    assert r_evo.status_code == 200
+    evo_data = r_evo.json()
+    assert "best_runbook" in evo_data
+    assert evo_data["best_runbook"]["fitness_score"] > 50.0
+
+    r_pop = client.get("/api/v1/runbooks/population")
+    assert r_pop.status_code == 200
+    pop_data = r_pop.json()
+    assert pop_data["count"] > 0
+    print("   [PASS] REST API /api/v1/runbooks endpoints (evolve, population) responded HTTP 200 OK.")
+
     print("\n" + "=" * 70)
-    print(">> [SUCCESS] All 20 Verification Pillars Passed with Exit Code 0!")
+    print(">> [SUCCESS] All 22 Verification Pillars Passed with Exit Code 0!")
     print("=" * 70)
 
 

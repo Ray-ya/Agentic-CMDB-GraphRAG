@@ -52,6 +52,19 @@ from slo_burn_governor import (
     BurnRateAlertTier,
     SLOBurnGovernanceReport
 )
+from formal_invariant_verifier import (
+    FormalSMTInvariantVerifier,
+    RemediationActionSpec,
+    ActionType,
+    FormalVerificationReport,
+    VerificationVerdict
+)
+from runbook_evolutionary_synthesizer import (
+    EvolutionaryRunbookSynthesizer,
+    FailureArchetype,
+    RunbookChromosome,
+    EvolutionaryRunbookReport
+)
 from datetime import datetime, timezone
 
 app = FastAPI(
@@ -78,6 +91,13 @@ tot_reasoner = ToTCounterfactualReasoner(topology, telemetry_engine, correlator)
 cascading_forecaster = CascadingFailureForecaster(topology, telemetry_engine, correlator)
 causal_discovery_engine = TraceCausalDiscoveryEngine(topology)
 slo_governor = SLOBurnBudgetGovernor(topology)
+formal_verifier = FormalSMTInvariantVerifier(topology)
+evolutionary_synthesizer = EvolutionaryRunbookSynthesizer(
+    topo=topology,
+    sandbox=digital_twin_sandbox,
+    formal_verifier=formal_verifier,
+    kb=kb
+)
 
 
 class AlertWebhookPayload(BaseModel):
@@ -657,6 +677,124 @@ def get_cuj_catalog():
         }
         for c in slo_governor.cujs.values()
     ]
+
+
+# -------------------------------------------------------------
+# Pillar 21: Formal SMT-Grounded Invariant Verifier & Safe Staging
+# -------------------------------------------------------------
+
+class ActionSpecPayload(BaseModel):
+    action_id: str
+    target_ci_id: str
+    action_type: str = "RESTART_POD"
+    command: str = "kubectl rollout restart"
+    is_destructive: bool = True
+    drained_instances: int = 1
+    target_stage_index: int = 0
+
+
+class InvariantVerificationPayload(BaseModel):
+    plan_id: str
+    actions: List[ActionSpecPayload]
+
+
+@app.post("/api/v1/verification/verify-invariants")
+def verify_plan_invariants(payload: InvariantVerificationPayload):
+    """
+    Formally evaluates candidate remediation actions against the SMT Invariant Catalog:
+    Quorum preservation, capacity headroom conservation, mutual exclusion, stateful replication lag,
+    and cumulative blast radius budget. Emits formal mathematical proofs or refutations.
+    """
+    action_specs = [
+        RemediationActionSpec(
+            action_id=a.action_id,
+            target_ci_id=a.target_ci_id,
+            action_type=ActionType(a.action_type) if a.action_type in ActionType.__members__ else ActionType.RESTART_POD,
+            command=a.command,
+            is_destructive=a.is_destructive,
+            drained_instances=a.drained_instances,
+            target_stage_index=a.target_stage_index
+        )
+        for a in payload.actions
+    ]
+    report = formal_verifier.verify_remediation_plan(
+        plan_id=payload.plan_id,
+        actions=action_specs
+    )
+    return asdict(report)
+
+
+@app.post("/api/v1/verification/repair-plan")
+def repair_plan_invariants(payload: InvariantVerificationPayload):
+    """
+    Synthesizes a formally safe sequential and canary-paced remediation plan
+    resolving any detected invariant violations (e.g. Quorum split-brain, mutual exclusion deadlock).
+    """
+    action_specs = [
+        RemediationActionSpec(
+            action_id=a.action_id,
+            target_ci_id=a.target_ci_id,
+            action_type=ActionType(a.action_type) if a.action_type in ActionType.__members__ else ActionType.RESTART_POD,
+            command=a.command,
+            is_destructive=a.is_destructive,
+            drained_instances=a.drained_instances,
+            target_stage_index=a.target_stage_index
+        )
+        for a in payload.actions
+    ]
+    repaired = formal_verifier.synthesize_safe_staged_repair(action_specs)
+    report = formal_verifier.verify_remediation_plan(
+        plan_id=f"{payload.plan_id}-REPAIRED",
+        actions=repaired
+    )
+    return {
+        "original_plan_id": payload.plan_id,
+        "is_safe_to_execute": report.is_safe_to_execute,
+        "verdict": report.verdict.value,
+        "repaired_action_count": len(repaired),
+        "repaired_actions": [asdict(a) for a in repaired],
+        "ascii_proof_certificate": report.ascii_proof_certificate
+    }
+
+
+# =====================================================================
+# Pillar 22: Autonomous Evolutionary Runbook Synthesizer & Trace Reflector
+# =====================================================================
+
+class RunbookEvolvePayload(BaseModel):
+    target_ci_id: str = Field(default="db-postgres-pay", example="db-postgres-pay")
+    failure_archetype: str = Field(default="DATABASE_POOL_EXHAUSTION", example="DATABASE_POOL_EXHAUSTION")
+    generations: int = Field(default=4, example=4)
+    population_size: int = Field(default=6, example=6)
+
+
+@app.post("/api/v1/runbooks/evolve")
+def evolve_runbooks(payload: RunbookEvolvePayload):
+    """
+    Executes multi-generation genetic optimization of SRE runbooks:
+    Synthesizes seeds, applies Crossover/Mutation, evaluates in Digital-Twin Shadow Sandbox,
+    verifies SMT Invariants, auto-promotes Pareto-optimal variants to Hybrid KB, and prunes stale runbooks.
+    """
+    archetype = FailureArchetype(payload.failure_archetype) if payload.failure_archetype in FailureArchetype.__members__ else FailureArchetype.DATABASE_POOL_EXHAUSTION
+    report = evolutionary_synthesizer.evolve_population(
+        target_ci_id=payload.target_ci_id,
+        archetype=archetype,
+        generations=payload.generations,
+        population_size=payload.population_size
+    )
+    return asdict(report)
+
+
+@app.get("/api/v1/runbooks/population")
+def get_runbook_population():
+    """
+    Retrieves the current evolutionary gene pool and chromosome registry.
+    """
+    return {
+        "count": len(evolutionary_synthesizer.population_registry),
+        "chromosomes": [asdict(c) for c in evolutionary_synthesizer.population_registry.values()]
+    }
+
 
 
 
